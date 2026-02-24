@@ -2,62 +2,86 @@
   <img src="assets/bolt-logo.svg" alt="Bolt logo" width="120" />
 
 # ⚡ Bolt
-### Build software faster — together.
+### Collaborative software development between **OpenClaw** and the user
 
-**Bolt is a collaborative Sprint Board + AI Activity platform for shipping software projects with full visibility.**
+Bolt is a purpose-built workspace for running software sprints with an AI teammate — planning, execution, context, and visibility in one place.
 
-[![Status](https://img.shields.io/badge/status-active%20development-22c55e?style=flat-square)](https://github.com/ndhill84/bolt)
-[![Monorepo](https://img.shields.io/badge/monorepo-npm%20workspaces-6366f1?style=flat-square)](https://docs.npmjs.com/cli/v10/using-npm/workspaces)
-[![Frontend](https://img.shields.io/badge/frontend-React%20%2B%20Vite-61dafb?style=flat-square)](https://vitejs.dev/)
+[![Status](https://img.shields.io/badge/status-active_development-22c55e?style=flat-square)](https://github.com/ndhill84/bolt)
+[![Powered by OpenClaw](https://img.shields.io/badge/powered_by-OpenClaw-0ea5e9?style=flat-square)](https://github.com/openclaw/openclaw)
+[![Collaboration](https://img.shields.io/badge/mode-human_%2B_ai_collaboration-8b5cf6?style=flat-square)](https://github.com/ndhill84/bolt)
+[![Frontend](https://img.shields.io/badge/frontend-React_%2B_Vite-61dafb?style=flat-square)](https://vitejs.dev/)
 [![Backend](https://img.shields.io/badge/backend-Fastify-000000?style=flat-square)](https://fastify.dev/)
 [![Database](https://img.shields.io/badge/database-PostgreSQL-336791?style=flat-square)](https://www.postgresql.org/)
-[![Storage](https://img.shields.io/badge/storage-S3%20compatible-f59e0b?style=flat-square)](https://aws.amazon.com/s3/)
+[![Storage](https://img.shields.io/badge/storage-S3_compatible-f59e0b?style=flat-square)](https://aws.amazon.com/s3/)
 
 </div>
 
 ---
 
-## 🚀 What is Bolt?
+## What Bolt is
 
-Bolt is a project cockpit for **human + AI software teams**.
+**Bolt is a collaborative software development tool designed specifically for Nick + OpenClaw to build projects together.**
 
-It combines:
-- **Sprint planning and execution** (stories, status, priorities, dependencies)
-- **Context management** (notes, decisions, file attachments)
-- **AI observability** (what the agent is doing right now, timeline, artifacts)
+It combines sprint planning, execution tracking, project context, and AI activity visibility so both the human and the agent can stay aligned and ship faster.
 
-The goal: less chaos, better momentum, faster shipping.
-
----
-
-## ✨ Core Product Vision
-
-- Clear board states: **Waiting → In Progress → Completed**
-- Story-level execution: edit, note, prioritize, assign, unblock
-- Context as a first-class feature: attach docs/files/screenshots/logs
-- Built-in agent transparency: see active task, progress, blockers, outputs
-- Token-efficient API design for AI collaboration at scale
+If a normal sprint board answers “what tasks exist,” Bolt also answers:
+- **What is the AI working on right now?**
+- **What changed this hour?**
+- **What is blocked and why?**
+- **What context/documents are attached to this work?**
 
 ---
 
-## 🧱 Tech Stack
+## Core capabilities
 
-### Frontend
-- React + TypeScript + Vite
+### 1) Sprint management (visual)
+- Kanban workflow: **Waiting → In Progress → Completed**
+- Story editing with priority, assignee, points, due date, acceptance criteria
+- Dependencies and blocker tracking
+- Story notes and decision capture
 
-### Backend
-- Fastify + TypeScript
+### 2) Visual task monitoring (AI + team transparency)
+- Live **Agent Activity** panel (current task + status)
+- Timeline of agent actions and milestones
+- Explicit blocker state (“waiting on user input”)
+- Evidence links (commits, PRs, logs, tests)
 
-### Data + Storage
-- PostgreSQL (Prisma)
-- S3-compatible object storage (MinIO/S3/R2)
+### 3) Context management for better AI collaboration
+- Attach files/docs/screenshots/logs to stories or project scope
+- Keep context near the work item
+- Support compact summaries for token-efficient AI usage
 
-### Monorepo
-- npm workspaces
+### 4) Token-efficient API design
+- Compact list payloads
+- On-demand detail fetches
+- Delta sync (`updated_since`)
+- Digest endpoints for concise sprint summaries
 
 ---
 
-## 📁 Repository Structure
+## Why this exists
+
+Bolt exists to make **human + AI software development operationally real** — not just chat-based.
+
+It gives both sides:
+- shared execution truth,
+- shared context,
+- shared visibility,
+- and a repeatable sprint loop that scales to bigger projects.
+
+---
+
+## Tech stack
+
+- **Frontend:** React + TypeScript + Vite
+- **Backend:** Fastify + TypeScript
+- **Data:** PostgreSQL + Prisma
+- **File storage:** S3-compatible object storage (MinIO/S3/R2)
+- **Repo:** npm workspaces monorepo
+
+---
+
+## Repository structure
 
 ```text
 bolt/
@@ -65,65 +89,50 @@ bolt/
 │  ├─ web/          # React UI
 │  └─ api/          # Fastify API
 ├─ packages/
-│  └─ shared/       # Shared types/contracts
-├─ docs/            # Product + architecture + API planning docs
-├─ docker-compose.yml
-└─ README.md
+│  └─ shared/       # Shared contracts/types
+├─ docs/            # Architecture, API, product, phased plan
+├─ assets/          # Branding assets (logo, etc.)
+└─ docker-compose.yml
 ```
 
 ---
 
-## 🛠️ Local Setup
+## Local setup
 
-### 1) Prerequisites
-
-- Node.js **22+**
-- npm **10+**
+### Prerequisites
+- Node.js 22+
+- npm 10+
 - Docker + Docker Compose
 
-### 2) Clone
+### Install + run
 
 ```bash
 git clone https://github.com/ndhill84/bolt.git
 cd bolt
-```
-
-### 3) Install dependencies
-
-```bash
 npm install
-```
-
-### 4) Start local infrastructure (Postgres + MinIO)
-
-```bash
 docker compose up -d
 ```
 
-Services:
+Run services:
+
+```bash
+# Terminal A
+npm run dev:api
+
+# Terminal B
+npm run dev:web
+```
+
+Defaults:
+- API: `http://localhost:4000`
+- Web: `http://localhost:5173`
 - Postgres: `localhost:5432`
 - MinIO API: `localhost:9000`
 - MinIO Console: `localhost:9001`
 
-### 5) Run API and Web app
-
-In terminal A:
-```bash
-npm run dev:api
-```
-
-In terminal B:
-```bash
-npm run dev:web
-```
-
-Default ports:
-- API: `http://localhost:4000`
-- Web: Vite default (`http://localhost:5173`)
-
 ---
 
-## ✅ Build
+## Build
 
 ```bash
 npm run -ws build
@@ -131,12 +140,12 @@ npm run -ws build
 
 ---
 
-## 📘 Project Docs
+## Project documentation
 
-See the `/docs` folder for:
+See `/docs` for:
 - Product vision
 - MVP scope
-- Architecture
+- System architecture
 - Data model
 - API spec
 - UI/UX plan
@@ -144,49 +153,35 @@ See the `/docs` folder for:
 
 ---
 
-## 🧭 Current Status
+## Current build status
 
-In active build mode.
+In active development with core foundation already in place.
 
-Already implemented:
-- Monorepo scaffold
-- API + web starter
-- Core board flow scaffold
-- Story endpoints + notes + move/edit primitives
+Implemented so far:
+- Monorepo scaffold (web + api + shared)
+- Initial sprint board workflow
+- Story endpoints (list/create/edit/move)
+- Notes support
+- Architecture and phased planning docs
 
 In progress:
-- File upload & context pipeline
-- Agent Activity dashboard (live “what AI is doing” view)
-- Digest endpoints for compact AI-ready summaries
+- File upload/context pipeline
+- Agent Activity UI module
+- Dependency management UI
+- Sprint digest endpoints
 
 ---
 
-## 🌍 Why this project matters
+## Contributing philosophy
 
-Bolt is more than a sprint board.
-
-It’s an operating system for ambitious builders who want to:
-- move faster without losing context,
-- collaborate deeply with AI,
-- and keep execution transparent from idea to shipped code.
-
-If you’re building cool things with an AI teammate, this is for you.
+Prioritize:
+1. Clear UX for collaboration
+2. Token-efficient backend contracts
+3. Observable AI work (no black boxes)
+4. Fast iteration with small, shippable milestones
 
 ---
 
-## 🤝 Contributing
+## License
 
-PRs, ideas, and feedback are welcome.
-
-If you contribute, please:
-- keep APIs compact and composable,
-- prefer clear UX over complexity,
-- optimize for human + AI collaboration.
-
----
-
-## 📄 License
-
-TBD.
-
-(Choose MIT/Apache-2.0/etc. before public launch.)
+TBD (set before public launch)
