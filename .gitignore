@@ -10,3 +10,4 @@ apps/*/dist
 apps/*/node_modules
 packages/*/node_modules
 *.log
+apps/api/data/

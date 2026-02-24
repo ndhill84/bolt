@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider = "sqlite"
+  url      = "file:../data/bolt.db"
 }
 
 model Project {
@@ -34,6 +34,7 @@ model Story {
   updatedAt          DateTime          @updatedAt
   project            Project           @relation(fields: [projectId], references: [id])
   notes              StoryNote[]
+  labels             StoryLabel[]
   dependencies       StoryDependency[] @relation("StoryDepends")
   dependentOf        StoryDependency[] @relation("StoryDependents")
   files              FileAsset[]
@@ -57,11 +58,21 @@ model StoryDependency {
   id               String   @id @default(uuid())
   storyId          String
   dependsOnStoryId String
+  type             String   @default("blocks")
   createdAt        DateTime @default(now())
   story            Story    @relation("StoryDepends", fields: [storyId], references: [id], onDelete: Cascade)
   dependsOn        Story    @relation("StoryDependents", fields: [dependsOnStoryId], references: [id], onDelete: Cascade)
 
   @@unique([storyId, dependsOnStoryId])
+}
+
+model StoryLabel {
+  id      String @id @default(uuid())
+  storyId String
+  label   String
+  story   Story  @relation(fields: [storyId], references: [id], onDelete: Cascade)
+
+  @@unique([storyId, label])
 }
 
 model FileAsset {
@@ -71,7 +82,9 @@ model FileAsset {
   filename    String
   contentType String
   byteSize    Int      @default(0)
-  storageKey  String
+  filePath    String
+  textContent String?
+  summary     String?
   uploadedBy  String
   createdAt   DateTime @default(now())
   project     Project  @relation(fields: [projectId], references: [id])
