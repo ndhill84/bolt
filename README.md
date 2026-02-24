@@ -6,12 +6,12 @@
 
 **Bolt is a collaborative Sprint Board + AI Activity platform for shipping software projects with full visibility.**
 
-[![Status](https://img.shields.io/badge/status-active%20development-22c55e?style=for-the-badge)](https://github.com/ndhill84/bolt)
-[![Monorepo](https://img.shields.io/badge/monorepo-npm%20workspaces-6366f1?style=for-the-badge)](https://docs.npmjs.com/cli/v10/using-npm/workspaces)
-[![Frontend](https://img.shields.io/badge/frontend-React%20%2B%20Vite-61dafb?style=for-the-badge)](https://vitejs.dev/)
-[![Backend](https://img.shields.io/badge/backend-Fastify-000000?style=for-the-badge)](https://fastify.dev/)
-[![Database](https://img.shields.io/badge/database-PostgreSQL-336791?style=for-the-badge)](https://www.postgresql.org/)
-[![Storage](https://img.shields.io/badge/storage-S3%20compatible-f59e0b?style=for-the-badge)](https://aws.amazon.com/s3/)
+[![Status](https://img.shields.io/badge/status-active%20development-22c55e?style=flat-square)](https://github.com/ndhill84/bolt)
+[![Monorepo](https://img.shields.io/badge/monorepo-npm%20workspaces-6366f1?style=flat-square)](https://docs.npmjs.com/cli/v10/using-npm/workspaces)
+[![Frontend](https://img.shields.io/badge/frontend-React%20%2B%20Vite-61dafb?style=flat-square)](https://vitejs.dev/)
+[![Backend](https://img.shields.io/badge/backend-Fastify-000000?style=flat-square)](https://fastify.dev/)
+[![Database](https://img.shields.io/badge/database-PostgreSQL-336791?style=flat-square)](https://www.postgresql.org/)
+[![Storage](https://img.shields.io/badge/storage-S3%20compatible-f59e0b?style=flat-square)](https://aws.amazon.com/s3/)
 
 </div>
 
