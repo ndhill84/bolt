@@ -22,7 +22,7 @@ type Props = {
   onAddFile: () => Promise<void>
 }
 
-const sections: DrawerSection[] = ['details', 'notes', 'dependencies', 'files']
+const sections: DrawerSection[] = ['details', 'notes', 'dependencies']
 
 export function StoryDrawer({
   open,
@@ -45,6 +45,8 @@ export function StoryDrawer({
   onAddDependency,
   onAddFile,
 }: Props) {
+  const activeSection: DrawerSection = section === 'files' ? 'details' : section
+
   return (
     <>
       {open && <button aria-label="Close drawer overlay" className="fixed inset-0 z-20 bg-black/40" onClick={onClose} />}
@@ -74,9 +76,9 @@ export function StoryDrawer({
                   type="button"
                   className="rounded-md border px-2 py-1 text-xs font-semibold uppercase"
                   style={{
-                    borderColor: section === entry ? 'var(--color-accent)' : 'var(--color-border-soft)',
-                    color: section === entry ? 'var(--color-accent)' : 'var(--color-text-subtle)',
-                    backgroundColor: section === entry ? 'color-mix(in oklab, var(--color-accent) 16%, transparent)' : 'transparent',
+                    borderColor: activeSection === entry ? 'var(--color-accent)' : 'var(--color-border-soft)',
+                    color: activeSection === entry ? 'var(--color-accent)' : 'var(--color-text-subtle)',
+                    backgroundColor: activeSection === entry ? 'color-mix(in oklab, var(--color-accent) 16%, transparent)' : 'transparent',
                   }}
                   onClick={() => onSectionChange(entry)}
                 >
@@ -85,7 +87,7 @@ export function StoryDrawer({
               ))}
             </div>
 
-            {section === 'details' && (
+            {activeSection === 'details' && (
               <div className="grid gap-2">
                 <label className="drawer-label">Title</label>
                 <input
@@ -121,13 +123,40 @@ export function StoryDrawer({
                   <option value="urgent">Urgent</option>
                 </select>
 
+                <label className="drawer-label">Files</label>
+                <div className="max-h-40 overflow-auto pr-1">
+                  <div className="grid gap-2">
+                    {files.map((file) => (
+                      <article
+                        key={file.id}
+                        className="rounded-lg border p-2 text-sm"
+                        style={{ borderColor: 'var(--color-border-soft)', backgroundColor: 'var(--color-surface)' }}
+                      >
+                        {file.filename}
+                      </article>
+                    ))}
+                    {!files.length && <p className="text-xs text-[var(--color-text-muted)]">No files attached.</p>}
+                  </div>
+                </div>
+                <div className="grid grid-cols-[1fr_auto] gap-2">
+                  <input
+                    className="input-field"
+                    placeholder="filename.ext"
+                    value={newFilename}
+                    onChange={(event) => onNewFilenameChange(event.target.value)}
+                  />
+                  <button type="button" className="ghost-btn" onClick={() => void onAddFile()}>
+                    Attach
+                  </button>
+                </div>
+
                 <button type="button" className="primary-btn" onClick={() => void onSaveStory()}>
                   Save Story
                 </button>
               </div>
             )}
 
-            {section === 'notes' && (
+            {activeSection === 'notes' && (
               <div className="grid gap-2">
                 <div className="max-h-56 overflow-auto pr-1">
                   <div className="grid gap-2">
@@ -159,7 +188,7 @@ export function StoryDrawer({
               </div>
             )}
 
-            {section === 'dependencies' && (
+            {activeSection === 'dependencies' && (
               <div className="grid gap-2">
                 <div className="max-h-56 overflow-auto pr-1">
                   <div className="grid gap-2">
@@ -187,33 +216,6 @@ export function StoryDrawer({
               </div>
             )}
 
-            {section === 'files' && (
-              <div className="grid gap-2">
-                <div className="max-h-56 overflow-auto pr-1">
-                  <div className="grid gap-2">
-                    {files.map((file) => (
-                      <article
-                        key={file.id}
-                        className="rounded-lg border p-2 text-sm"
-                        style={{ borderColor: 'var(--color-border-soft)', backgroundColor: 'var(--color-surface)' }}
-                      >
-                        {file.filename}
-                      </article>
-                    ))}
-                    {!files.length && <p className="text-xs text-[var(--color-text-muted)]">No files attached.</p>}
-                  </div>
-                </div>
-                <input
-                  className="input-field"
-                  placeholder="filename.ext"
-                  value={newFilename}
-                  onChange={(event) => onNewFilenameChange(event.target.value)}
-                />
-                <button type="button" className="primary-btn" onClick={() => void onAddFile()}>
-                  Attach File
-                </button>
-              </div>
-            )}
           </>
         )}
       </aside>
