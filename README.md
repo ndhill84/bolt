@@ -2,7 +2,7 @@
   <img src="assets/bolt-logo.svg" alt="Bolt logo" width="120" />
 
 # ⚡ Bolt
-### Collaborative software development platform built as an interface between **OpenClaw** and the user
+### Collaborative software development platform built as an interface between AI coding tools and the user. 
 
 Bolt is a purpose-built workspace for running software sprints with an AI teammate — planning, execution, context, and visibility in one place.
 
