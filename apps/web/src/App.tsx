@@ -34,7 +34,7 @@ function App() {
   const [files, setFiles] = useState<FileAsset[]>([])
   const [countsByStoryId, setCountsByStoryId] = useState<Record<string, StoryCountSummary>>({})
 
-  const [newTitle, setNewTitle] = useState('')
+  const [isCreatingStory, setIsCreatingStory] = useState(false)
   const [newNote, setNewNote] = useState('')
   const [newDependencyId, setNewDependencyId] = useState('')
   const [newFilename, setNewFilename] = useState('')
@@ -55,7 +55,6 @@ function App() {
   const [agentSession, setAgentSession] = useState<AgentSession | null>(null)
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([])
 
-  const newStoryInputRef = useRef<HTMLInputElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
@@ -185,6 +184,7 @@ function App() {
 
   useEffect(() => {
     setSelectedStory(null)
+    setIsCreatingStory(false)
     setDrawerOpen(false)
     loadStories(selectedProjectId).catch(console.error)
     loadAgent(selectedProjectId).catch(console.error)
@@ -211,7 +211,7 @@ function App() {
 
       if (event.key.toLowerCase() === 'n') {
         event.preventDefault()
-        newStoryInputRef.current?.focus()
+        openNewStoryDrawer()
       }
 
       if (event.key.toLowerCase() === 'f') {
@@ -267,23 +267,25 @@ function App() {
     await loadProjects()
   }
 
-  async function createStory() {
-    if (!newTitle.trim()) return
-
-    await fetch(`${API}/stories`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        title: newTitle,
-        status: 'waiting',
-        priority: 'med',
-        projectId: selectedProjectId === 'all' ? 'core' : selectedProjectId,
-      }),
+  function openNewStoryDrawer() {
+    const projectId = selectedProjectId === 'all' ? 'core' : selectedProjectId
+    setSelectedStory({
+      id: 'new-story',
+      projectId,
+      title: '',
+      description: '',
+      status: 'waiting',
+      priority: 'med',
+      blocked: false,
+      assignee: 'you',
+      updatedAt: new Date().toISOString(),
     })
-
-    setNewTitle('')
-    await loadStories(selectedProjectId)
-    await loadAgent(selectedProjectId)
+    setIsCreatingStory(true)
+    setDrawerSection('details')
+    setDrawerOpen(true)
+    setNotes([])
+    setDependencies([])
+    setFiles([])
   }
 
   async function moveStory(story: Story, status: StoryStatus) {
@@ -311,6 +313,27 @@ function App() {
 
   async function saveStoryEdit() {
     if (!selectedStory) return
+
+    if (isCreatingStory) {
+      if (!selectedStory.title.trim()) return
+      await fetch(`${API}/stories`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          projectId: selectedProjectId === 'all' ? 'core' : selectedProjectId,
+          title: selectedStory.title,
+          description: selectedStory.description,
+          priority: selectedStory.priority,
+          assignee: selectedStory.assignee,
+          status: selectedStory.status,
+        }),
+      })
+      setIsCreatingStory(false)
+      setDrawerOpen(false)
+      setSelectedStory(null)
+      await Promise.all([loadStories(selectedProjectId), loadAgent(selectedProjectId)])
+      return
+    }
 
     await fetch(`${API}/stories/${selectedStory.id}`, {
       method: 'PATCH',
@@ -396,6 +419,7 @@ function App() {
   }
 
   function openDrawer(story: Story, section: DrawerSection) {
+    setIsCreatingStory(false)
     setSelectedStory(story)
     setDrawerSection(section)
     setDrawerOpen(true)
@@ -419,9 +443,7 @@ function App() {
     <main className="theme-dark min-h-screen bg-[var(--color-bg)] text-[var(--color-text)]">
       <div className="mx-auto max-w-[1500px] px-4 pb-44 pt-4">
         <TopBar
-          newTitle={newTitle}
-          onNewTitleChange={setNewTitle}
-          onCreateStory={createStory}
+          onOpenNewStory={openNewStoryDrawer}
           filters={filters}
           onFilterChange={(changes) => setFilters((prev) => ({ ...prev, ...changes, preset: changes.preset ?? prev.preset }))}
           onSelectPreset={(preset) => setFilters((prev) => ({ ...prev, preset }))}
@@ -430,7 +452,6 @@ function App() {
           onProjectChange={setSelectedProjectId}
           onCreateProject={createProject}
           onEditProject={editProject}
-          storyInputRef={newStoryInputRef}
           searchInputRef={searchInputRef}
         />
 
@@ -461,9 +482,13 @@ function App() {
         newNote={newNote}
         newDependencyId={newDependencyId}
         newFilename={newFilename}
-        onClose={() => setDrawerOpen(false)}
+        onClose={() => {
+          setDrawerOpen(false)
+          setIsCreatingStory(false)
+        }}
         onSectionChange={setDrawerSection}
         onStoryChange={setSelectedStory}
+        isCreatingStory={isCreatingStory}
         onSaveStory={saveStoryEdit}
         onNewNoteChange={setNewNote}
         onNewDependencyIdChange={setNewDependencyId}

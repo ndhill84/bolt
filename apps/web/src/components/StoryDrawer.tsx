@@ -13,6 +13,7 @@ type Props = {
   onClose: () => void
   onSectionChange: (section: DrawerSection) => void
   onStoryChange: (story: Story) => void
+  isCreatingStory?: boolean
   onSaveStory: () => Promise<void>
   onNewNoteChange: (value: string) => void
   onNewDependencyIdChange: (value: string) => void
@@ -37,6 +38,7 @@ export function StoryDrawer({
   onClose,
   onSectionChange,
   onStoryChange,
+  isCreatingStory,
   onSaveStory,
   onNewNoteChange,
   onNewDependencyIdChange,
@@ -151,7 +153,7 @@ export function StoryDrawer({
                 </div>
 
                 <button type="button" className="primary-btn" onClick={() => void onSaveStory()}>
-                  Save Story
+                  {isCreatingStory ? 'Create Story' : 'Save Story'}
                 </button>
               </div>
             )}
