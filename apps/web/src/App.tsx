@@ -23,6 +23,7 @@ import type {
 
 const PRESET_STORAGE_KEY = 'bolt.board.preset'
 const DOCK_MODE_STORAGE_KEY = 'bolt.agentDock.mode'
+const ASSIGNEE_OPTIONS_STORAGE_KEY = 'bolt.assignees'
 
 function App() {
   const [stories, setStories] = useState<Story[]>([])
@@ -54,6 +55,16 @@ function App() {
 
   const [agentSession, setAgentSession] = useState<AgentSession | null>(null)
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([])
+  const [assigneeOptions, setAssigneeOptions] = useState<string[]>(() => {
+    const saved = localStorage.getItem(ASSIGNEE_OPTIONS_STORAGE_KEY)
+    if (!saved) return ['You', 'Claudio']
+    try {
+      const parsed = JSON.parse(saved) as string[]
+      return parsed.length ? parsed : ['You', 'Claudio']
+    } catch {
+      return ['You', 'Claudio']
+    }
+  })
 
   const searchInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -66,6 +77,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem(PRESET_STORAGE_KEY, filters.preset)
   }, [filters.preset])
+
+  useEffect(() => {
+    localStorage.setItem(ASSIGNEE_OPTIONS_STORAGE_KEY, JSON.stringify(assigneeOptions))
+  }, [assigneeOptions])
 
   async function loadProjects() {
     const fallbackProjects: Project[] = [
@@ -229,6 +244,15 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  function addAssigneeOption() {
+    const next = window.prompt('Add assignee name')?.trim()
+    if (!next) return
+    setAssigneeOptions((prev) => {
+      if (prev.some((item) => item.toLowerCase() === next.toLowerCase())) return prev
+      return [...prev, next]
+    })
+  }
+
   async function createProject() {
     const name = window.prompt('New project name')?.trim()
     if (!name || name.toLowerCase() === 'all projects') return
@@ -277,7 +301,7 @@ function App() {
       status: 'waiting',
       priority: 'med',
       blocked: false,
-      assignee: 'you',
+      assignee: 'You',
       updatedAt: new Date().toISOString(),
     })
     setIsCreatingStory(true)
@@ -513,6 +537,8 @@ function App() {
         dependencyOptions={stories
           .filter((story) => (selectedProjectId === 'all' ? true : story.projectId === selectedProjectId) && story.id !== selectedStory?.id)
           .map((story) => ({ id: story.id, title: story.title }))}
+        assigneeOptions={assigneeOptions}
+        onAddAssigneeOption={addAssigneeOption}
         newFilename={newFilename}
         onClose={() => {
           setDrawerOpen(false)

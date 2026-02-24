@@ -10,6 +10,8 @@ type Props = {
   newNote: string
   newDependencyIds: string[]
   dependencyOptions: Array<{ id: string; title: string }>
+  assigneeOptions: string[]
+  onAddAssigneeOption: () => void
   newFilename: string
   onClose: () => void
   onSectionChange: (section: DrawerSection) => void
@@ -36,6 +38,8 @@ export function StoryDrawer({
   newNote,
   newDependencyIds,
   dependencyOptions,
+  assigneeOptions,
+  onAddAssigneeOption,
   newFilename,
   onClose,
   onSectionChange,
@@ -111,11 +115,23 @@ export function StoryDrawer({
                 />
 
                 <label className="drawer-label">Assignee</label>
-                <input
-                  className="input-field"
-                  value={story.assignee ?? ''}
-                  onChange={(event) => onStoryChange({ ...story, assignee: event.target.value })}
-                />
+                <div className="grid grid-cols-[1fr_auto] gap-2">
+                  <select
+                    className="input-field"
+                    value={story.assignee ?? ''}
+                    onChange={(event) => onStoryChange({ ...story, assignee: event.target.value })}
+                  >
+                    <option value="">Unassigned</option>
+                    {assigneeOptions.map((assignee) => (
+                      <option key={assignee} value={assignee}>
+                        {assignee}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="ghost-btn" onClick={onAddAssigneeOption}>
+                    +
+                  </button>
+                </div>
 
                 <label className="drawer-label">Priority</label>
                 <select
