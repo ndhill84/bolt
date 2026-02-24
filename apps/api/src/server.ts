@@ -45,6 +45,8 @@ type StoryBody = {
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
+const TEXT_CONTENT_MAX_CHARS = 20000;
+const SUMMARY_MAX_CHARS = 400;
 const FILE_LIST_INCLUDE_ALLOWLIST = new Set(['summary', 'textContent']);
 const STORY_FIELDS_ALLOWLIST = new Set([
   'id',
@@ -170,6 +172,33 @@ function truncate(value: unknown, maxChars: number): unknown {
   if (typeof value !== 'string') return value;
   if (value.length <= maxChars) return value;
   return value.slice(0, maxChars);
+}
+
+function canExtractText(contentType: string, filename: string): boolean {
+  const lower = filename.toLowerCase();
+  if (contentType.startsWith('text/')) return true;
+  if (contentType === 'application/json' || contentType === 'application/xml') return true;
+  return ['.txt', '.md', '.markdown', '.json', '.csv', '.log', '.xml', '.yml', '.yaml'].some((ext) =>
+    lower.endsWith(ext),
+  );
+}
+
+function deriveTextAndSummary(contentType: string, filename: string, bytes: Buffer): { textContent: string | null; summary: string | null } {
+  if (!canExtractText(contentType, filename)) return { textContent: null, summary: null };
+
+  try {
+    const text = bytes.toString('utf8').replace(/\u0000/g, '').trim();
+    if (!text) return { textContent: null, summary: null };
+
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    const summary = normalized.slice(0, SUMMARY_MAX_CHARS);
+    return {
+      textContent: text.slice(0, TEXT_CONTENT_MAX_CHARS),
+      summary: summary || null,
+    };
+  } catch {
+    return { textContent: null, summary: null };
+  }
 }
 
 app.get('/health', async () => ({ ok: true }));
@@ -546,6 +575,8 @@ app.post('/api/v1/files', async (req, reply) => {
     if (!story) return reply.status(404).send({ error: 'story not found' });
   }
 
+  const inferredSummary = body.summary ?? (typeof body.textContent === 'string' ? body.textContent.slice(0, SUMMARY_MAX_CHARS) : undefined);
+
   const file = await prisma.fileAsset.create({
     data: {
       projectId,
@@ -555,7 +586,7 @@ app.post('/api/v1/files', async (req, reply) => {
       byteSize: body.byteSize ?? 0,
       filePath: body.filePath ?? `files/${projectId}/${Date.now()}-${body.filename}`,
       textContent: body.textContent,
-      summary: body.summary,
+      summary: inferredSummary,
       uploadedBy: body.uploadedBy ?? 'you',
     },
   });
@@ -643,14 +674,19 @@ app.post('/api/v1/files/upload', async (req, reply) => {
   const fileBytes = await filePart.toBuffer();
   await writeFile(absolutePath, fileBytes);
 
+  const contentType = filePart.mimetype ?? 'application/octet-stream';
+  const extracted = deriveTextAndSummary(contentType, originalName, fileBytes);
+
   const file = await prisma.fileAsset.create({
     data: {
       projectId: normalizedProjectId,
       storyId: normalizedStoryId,
       filename: originalName,
-      contentType: filePart.mimetype ?? 'application/octet-stream',
+      contentType,
       byteSize: fileBytes.byteLength,
       filePath: relativePath,
+      textContent: extracted.textContent,
+      summary: extracted.summary,
       uploadedBy: uploadedBy.trim(),
     },
   });
