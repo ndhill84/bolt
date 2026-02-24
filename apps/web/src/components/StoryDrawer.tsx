@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { DrawerSection, FileAsset, Note, Priority, Story, StoryDependency } from '../lib/types'
 
 type Props = {
@@ -11,7 +12,7 @@ type Props = {
   newDependencyIds: string[]
   dependencyOptions: Array<{ id: string; title: string }>
   assigneeOptions: string[]
-  onAddAssigneeOption: () => void
+  onAddAssigneeOption: (name: string) => void
   newFilename: string
   onClose: () => void
   onSectionChange: (section: DrawerSection) => void
@@ -54,6 +55,7 @@ export function StoryDrawer({
   onAddFile,
 }: Props) {
   const activeSection: DrawerSection = section === 'files' ? 'details' : section
+  const [newAssigneeName, setNewAssigneeName] = useState('')
 
   return (
     <>
@@ -115,7 +117,7 @@ export function StoryDrawer({
                 />
 
                 <label className="drawer-label">Assignee</label>
-                <div className="grid grid-cols-[1fr_auto] gap-2">
+                <div className="grid gap-2">
                   <select
                     className="input-field"
                     value={story.assignee ?? ''}
@@ -128,9 +130,27 @@ export function StoryDrawer({
                       </option>
                     ))}
                   </select>
-                  <button type="button" className="ghost-btn" onClick={onAddAssigneeOption}>
-                    +
-                  </button>
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
+                    <input
+                      className="input-field"
+                      placeholder="Add assignee"
+                      value={newAssigneeName}
+                      onChange={(event) => setNewAssigneeName(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() => {
+                        const trimmed = newAssigneeName.trim()
+                        if (!trimmed) return
+                        onAddAssigneeOption(trimmed)
+                        onStoryChange({ ...story, assignee: trimmed })
+                        setNewAssigneeName('')
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
                 </div>
 
                 <label className="drawer-label">Priority</label>

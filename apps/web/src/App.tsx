@@ -244,8 +244,8 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  function addAssigneeOption() {
-    const next = window.prompt('Add assignee name')?.trim()
+  function addAssigneeOption(name: string) {
+    const next = name.trim()
     if (!next) return
     setAssigneeOptions((prev) => {
       if (prev.some((item) => item.toLowerCase() === next.toLowerCase())) return prev
