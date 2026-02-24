@@ -71,6 +71,55 @@ It gives both sides:
 
 ---
 
+
+## 🧠 Token-Optimized API (AI-First by Design)
+
+Bolt is built **ground-up for AI-assisted software development** — not retrofitted later.
+
+That means the API is engineered to deliver maximum capability with minimal token burn, so OpenClaw and other agents can operate faster, cheaper, and with less context thrash.
+
+### Why this matters
+When AI teammates repeatedly parse oversized payloads, costs rise and performance drops. Bolt avoids that by making small, composable responses the default.
+
+### Core token-reduction strategies
+
+- **Thin lists, rich details**
+  - List endpoints return compact cards only.
+  - Full payloads are fetched on demand from detail routes.
+
+- **Field projection (`fields=`)**
+  - Ask only for what you need:
+  - `?fields=id,title,status,priority,blocked`
+
+- **Controlled expansions (`include=`)**
+  - Nested data is opt-in, never automatic.
+  - Prevents accidental response bloat.
+
+- **Delta sync (`updated_since`)**
+  - Agents ingest only changes, not full snapshots.
+  - Perfect for continuous background collaboration.
+
+- **Cursor pagination everywhere**
+  - Predictable small pages with stable ordering.
+  - Better for incremental AI loops.
+
+- **Digest endpoints for AI reasoning**
+  - Pre-computed summaries: counts, blockers, risks, next actions.
+  - Dramatically reduces prompt size for planning/status turns.
+
+- **Compact, stable schemas**
+  - Consistent keys + enum values reduce parse errors and extra clarification turns.
+
+- **Batch operations**
+  - Move/update multiple stories in one request to reduce call overhead.
+
+### Net result
+Bolt gives you full sprint-management power **without** the token tax of bloated APIs.
+
+It’s the same feature depth — just sharper, leaner, and built for human + AI execution velocity.
+
+---
+
 ## Tech stack
 
 - **Frontend:** React + TypeScript + Vite
