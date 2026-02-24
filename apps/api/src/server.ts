@@ -501,6 +501,9 @@ app.post('/api/v1/stories/:id/dependencies', async (req, reply) => {
 
   const dependencyTarget = await prisma.story.findUnique({ where: { id: body.dependsOnStoryId } });
   if (!dependencyTarget) return reply.status(404).send({ error: 'dependsOn story not found' });
+  if (dependencyTarget.projectId !== story.projectId) {
+    return reply.status(400).send({ error: 'dependencies must be within the same project' });
+  }
 
   try {
     const dependency = await prisma.storyDependency.create({
