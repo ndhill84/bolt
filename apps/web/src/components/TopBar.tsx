@@ -44,7 +44,10 @@ export function TopBar({
     <header className="mb-4 rounded-2xl border p-4" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-panel)' }}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-[var(--color-text)]">Bolt Sprint Board</h1>
+          <h1 className="text-xl font-semibold text-[var(--color-text)] flex items-center gap-2">
+            <img src="/bolt-logo.svg" alt="Bolt" className="h-6 w-6" />
+            <span>Bolt Sprint Board</span>
+          </h1>
           <p className="text-xs text-[var(--color-text-muted)]">Compact board with status-safe signaling and quick card actions.</p>
         </div>
         <div className="flex items-center gap-2">
