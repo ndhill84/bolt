@@ -1,6 +1,6 @@
 import { FilterPresets } from './FilterPresets'
 import type { RefObject } from 'react'
-import type { FilterPresetId, StoryFilters, StoryStatus } from '../lib/types'
+import type { FilterPresetId, Project, StoryFilters, StoryStatus } from '../lib/types'
 
 type Props = {
   newTitle: string
@@ -9,6 +9,11 @@ type Props = {
   filters: StoryFilters
   onFilterChange: (changes: Partial<StoryFilters>) => void
   onSelectPreset: (preset: FilterPresetId) => void
+  projects: Project[]
+  selectedProjectId: string
+  onProjectChange: (projectId: string) => void
+  onCreateProject: () => Promise<void>
+  onEditProject: () => Promise<void>
   storyInputRef: RefObject<HTMLInputElement | null>
   searchInputRef: RefObject<HTMLInputElement | null>
 }
@@ -27,6 +32,11 @@ export function TopBar({
   filters,
   onFilterChange,
   onSelectPreset,
+  projects,
+  selectedProjectId,
+  onProjectChange,
+  onCreateProject,
+  onEditProject,
   storyInputRef,
   searchInputRef,
 }: Props) {
@@ -38,6 +48,24 @@ export function TopBar({
           <p className="text-xs text-[var(--color-text-muted)]">Compact board with status-safe signaling and quick card actions.</p>
         </div>
         <div className="flex items-center gap-2">
+          <select
+            className="input-field w-56"
+            aria-label="Project"
+            value={selectedProjectId}
+            onChange={(event) => onProjectChange(event.target.value)}
+          >
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="ghost-btn" onClick={() => void onCreateProject()}>
+            + Project
+          </button>
+          <button type="button" className="ghost-btn" onClick={() => void onEditProject()} disabled={selectedProjectId === 'all'}>
+            Edit Project
+          </button>
           <input
             ref={storyInputRef}
             value={newTitle}

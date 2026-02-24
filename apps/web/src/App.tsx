@@ -13,6 +13,7 @@ import type {
   FileAsset,
   FilterPresetId,
   Note,
+  Project,
   Story,
   StoryCountSummary,
   StoryDependency,
@@ -25,6 +26,8 @@ const DOCK_MODE_STORAGE_KEY = 'bolt.agentDock.mode'
 
 function App() {
   const [stories, setStories] = useState<Story[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('all')
   const [selectedStory, setSelectedStory] = useState<Story | null>(null)
   const [notes, setNotes] = useState<Note[]>([])
   const [dependencies, setDependencies] = useState<StoryDependency[]>([])
@@ -65,8 +68,35 @@ function App() {
     localStorage.setItem(PRESET_STORAGE_KEY, filters.preset)
   }, [filters.preset])
 
-  async function loadStories() {
-    const response = await fetch(`${API}/stories`)
+  async function loadProjects() {
+    const fallbackProjects: Project[] = [
+      { id: 'all', name: 'All Projects' },
+      { id: 'demo-calc', name: 'Demo: Scientific Calculator' },
+      { id: 'demo-weather', name: 'Demo: CLI Weather App' },
+      { id: 'core', name: 'Core / Other' },
+    ]
+
+    try {
+      const response = await fetch(`${API}/projects`)
+      if (!response.ok) throw new Error('projects endpoint unavailable')
+      const json = await response.json()
+      const apiProjects = (json.data ?? []) as Project[]
+      const nextProjects = [{ id: 'all', name: 'All Projects' }, ...apiProjects]
+      setProjects(nextProjects)
+      if (!nextProjects.some((p) => p.id === selectedProjectId)) {
+        setSelectedProjectId('all')
+        return 'all'
+      }
+      return selectedProjectId
+    } catch {
+      setProjects(fallbackProjects)
+      return selectedProjectId
+    }
+  }
+
+  async function loadStories(projectId = selectedProjectId) {
+    const query = projectId === 'all' ? '' : `?projectId=${encodeURIComponent(projectId)}`
+    const response = await fetch(`${API}/stories${query}`)
     const json = await response.json()
     const nextStories = (json.data ?? []) as Story[]
     setStories(nextStories)
@@ -80,7 +110,9 @@ function App() {
           const [notesRes, depsRes, filesRes] = await Promise.all([
             fetch(`${API}/stories/${story.id}/notes`),
             fetch(`${API}/stories/${story.id}/dependencies`),
-            fetch(`${API}/files?storyId=${story.id}`),
+            fetch(
+              `${API}/files?storyId=${story.id}${selectedProjectId === 'all' ? '' : `&projectId=${encodeURIComponent(selectedProjectId)}`}`,
+            ),
           ])
           const [notesJson, depsJson, filesJson] = await Promise.all([notesRes.json(), depsRes.json(), filesRes.json()])
           return [
@@ -111,15 +143,21 @@ function App() {
     setDependencies(json.data ?? [])
   }
 
-  async function loadFiles(storyId?: string) {
-    const query = storyId ? `?storyId=${storyId}` : ''
+  async function loadFiles(storyId?: string, projectId = selectedProjectId) {
+    const projectParam = projectId === 'all' ? '' : `projectId=${encodeURIComponent(projectId)}`
+    const query = storyId
+      ? `?storyId=${storyId}${projectParam ? `&${projectParam}` : ''}`
+      : projectParam
+        ? `?${projectParam}`
+        : ''
     const response = await fetch(`${API}/files${query}`)
     const json = await response.json()
     setFiles(json.data ?? [])
   }
 
-  async function loadAgent() {
-    const sessionsRes = await fetch(`${API}/agent/sessions`)
+  async function loadAgent(projectId = selectedProjectId) {
+    const query = projectId === 'all' ? '' : `?projectId=${encodeURIComponent(projectId)}`
+    const sessionsRes = await fetch(`${API}/agent/sessions${query}`)
     const sessionsJson = await sessionsRes.json()
     const session = sessionsJson?.data?.[0] as AgentSession | undefined
     setAgentSession(session ?? null)
@@ -132,23 +170,32 @@ function App() {
   }
 
   useEffect(() => {
-    loadStories().catch(console.error)
-    loadAgent().catch(console.error)
+    ;(async () => {
+      const projectId = await loadProjects()
+      await Promise.all([loadStories(projectId), loadAgent(projectId)])
+    })().catch(console.error)
   }, [])
 
   useEffect(() => {
     if (!selectedStory) return
     loadNotes(selectedStory.id).catch(console.error)
     loadDependencies(selectedStory.id).catch(console.error)
-    loadFiles(selectedStory.id).catch(console.error)
-  }, [selectedStory?.id])
+    loadFiles(selectedStory.id, selectedProjectId).catch(console.error)
+  }, [selectedStory?.id, selectedProjectId])
+
+  useEffect(() => {
+    setSelectedStory(null)
+    setDrawerOpen(false)
+    loadStories(selectedProjectId).catch(console.error)
+    loadAgent(selectedProjectId).catch(console.error)
+  }, [selectedProjectId])
 
   useEffect(() => {
     const interval = setInterval(() => {
-      loadAgent().catch(console.error)
+      loadAgent(selectedProjectId).catch(console.error)
     }, 12000)
     return () => clearInterval(interval)
-  }, [])
+  }, [selectedProjectId])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -182,18 +229,61 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  async function createProject() {
+    const name = window.prompt('New project name')?.trim()
+    if (!name || name.toLowerCase() === 'all projects') return
+
+    const description = window.prompt('Project description (optional)')?.trim() || undefined
+
+    const response = await fetch(`${API}/projects`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, description }),
+    })
+
+    if (!response.ok) return
+    const json = await response.json()
+    const created = json.data as Project
+    await loadProjects()
+    setSelectedProjectId(created.id)
+  }
+
+  async function editProject() {
+    if (selectedProjectId === 'all') return
+    const current = projects.find((project) => project.id === selectedProjectId)
+    if (!current) return
+
+    const name = window.prompt('Edit project name', current.name)?.trim()
+    if (!name) return
+    const description = window.prompt('Edit project description', current.description ?? '')?.trim() || undefined
+
+    const response = await fetch(`${API}/projects/${selectedProjectId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, description }),
+    })
+
+    if (!response.ok) return
+    await loadProjects()
+  }
+
   async function createStory() {
     if (!newTitle.trim()) return
 
     await fetch(`${API}/stories`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ title: newTitle, status: 'waiting', priority: 'med' }),
+      body: JSON.stringify({
+        title: newTitle,
+        status: 'waiting',
+        priority: 'med',
+        projectId: selectedProjectId === 'all' ? 'core' : selectedProjectId,
+      }),
     })
 
     setNewTitle('')
-    await loadStories()
-    await loadAgent()
+    await loadStories(selectedProjectId)
+    await loadAgent(selectedProjectId)
   }
 
   async function moveStory(story: Story, status: StoryStatus) {
@@ -205,8 +295,8 @@ function App() {
       body: JSON.stringify({ status }),
     })
 
-    await loadStories()
-    await loadAgent()
+    await loadStories(selectedProjectId)
+    await loadAgent(selectedProjectId)
     if (selectedStory?.id === story.id) {
       setSelectedStory({ ...story, status })
     }
@@ -234,7 +324,7 @@ function App() {
       }),
     })
 
-    await loadStories()
+    await loadStories(selectedProjectId)
   }
 
   async function toggleBlocked(story: Story) {
@@ -254,7 +344,7 @@ function App() {
       setSelectedStory({ ...selectedStory, blocked: !story.blocked })
     }
 
-    await loadStories()
+    await loadStories(selectedProjectId)
   }
 
   async function addNote() {
@@ -263,12 +353,12 @@ function App() {
     await fetch(`${API}/stories/${selectedStory.id}/notes`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ body: newNote, author: 'Nick' }),
+      body: JSON.stringify({ body: newNote, author: 'you' }),
     })
 
     setNewNote('')
     await loadNotes(selectedStory.id)
-    await loadStories()
+    await loadStories(selectedProjectId)
   }
 
   async function addDependency() {
@@ -281,7 +371,7 @@ function App() {
     })
 
     setNewDependencyId('')
-    await Promise.all([loadDependencies(selectedStory.id), loadStories()])
+    await Promise.all([loadDependencies(selectedStory.id), loadStories(selectedProjectId)])
   }
 
   async function addFile(storyId?: string, filenameOverride?: string) {
@@ -293,15 +383,16 @@ function App() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         filename,
+        projectId: selectedProjectId,
         storyId: storyId ?? selectedStory?.id,
-        uploadedBy: 'Nick',
+        uploadedBy: 'you',
         byteSize: 0,
       }),
     })
 
     setNewFilename('')
-    await loadFiles(storyId ?? selectedStory?.id)
-    await Promise.all([loadStories(), loadAgent()])
+    await loadFiles(storyId ?? selectedStory?.id, selectedProjectId)
+    await Promise.all([loadStories(selectedProjectId), loadAgent(selectedProjectId)])
   }
 
   function openDrawer(story: Story, section: DrawerSection) {
@@ -310,7 +401,10 @@ function App() {
     setDrawerOpen(true)
   }
 
-  const filteredStories = useMemo(() => filterStories(stories, filters), [stories, filters])
+  const filteredStories = useMemo(() => {
+    const byProject = stories.filter((story) => selectedProjectId === 'all' || story.projectId === selectedProjectId)
+    return filterStories(byProject, filters)
+  }, [stories, filters, selectedProjectId])
 
   const storiesByStatus = useMemo(
     () => ({
@@ -331,6 +425,11 @@ function App() {
           filters={filters}
           onFilterChange={(changes) => setFilters((prev) => ({ ...prev, ...changes, preset: changes.preset ?? prev.preset }))}
           onSelectPreset={(preset) => setFilters((prev) => ({ ...prev, preset }))}
+          projects={projects}
+          selectedProjectId={selectedProjectId}
+          onProjectChange={setSelectedProjectId}
+          onCreateProject={createProject}
+          onEditProject={editProject}
           storyInputRef={newStoryInputRef}
           searchInputRef={searchInputRef}
         />

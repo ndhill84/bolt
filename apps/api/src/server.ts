@@ -1,266 +1,329 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import { PrismaClient } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 
 const app = Fastify({ logger: true });
 await app.register(cors, { origin: true });
 
-const prisma = new PrismaClient();
-const DEFAULT_PROJECT_ID = 'default';
-
 type StoryStatus = 'waiting' | 'in_progress' | 'completed';
+type Priority = 'low' | 'med' | 'high' | 'urgent';
 
-async function ensureDefaults() {
-  await prisma.project.upsert({
-    where: { id: DEFAULT_PROJECT_ID },
-    update: {},
-    create: { id: DEFAULT_PROJECT_ID, name: 'Bolt Default Project', description: 'Default project for local development' }
-  });
-
-  const session = await prisma.agentSession.findFirst({ where: { projectId: DEFAULT_PROJECT_ID } });
-  if (!session) {
-    await prisma.agentSession.create({
-      data: {
-        projectId: DEFAULT_PROJECT_ID,
-        title: 'Build Bolt milestones',
-        state: 'coding',
-        lastHeartbeatAt: new Date(),
-        events: { create: [{ type: 'status', message: 'Persistence mode active' }] }
-      }
-    });
-  }
+interface Project {
+  id: string;
+  name: string;
+  description?: string;
 }
+
+interface Story {
+  id: string;
+  projectId: string;
+  title: string;
+  description?: string;
+  acceptanceCriteria?: string;
+  status: StoryStatus;
+  priority: Priority;
+  blocked: boolean;
+  points?: number;
+  assignee?: string;
+  dueAt?: string;
+  updatedAt: string;
+}
+
+interface Note {
+  id: string;
+  storyId: string;
+  author: string;
+  body: string;
+  createdAt: string;
+}
+
+interface Dependency {
+  id: string;
+  storyId: string;
+  dependsOnStoryId: string;
+}
+
+interface FileAsset {
+  id: string;
+  projectId: string;
+  storyId?: string;
+  filename: string;
+  contentType: string;
+  byteSize: number;
+  storageKey: string;
+  uploadedBy: string;
+  createdAt: string;
+}
+
+interface AgentSession {
+  id: string;
+  projectId: string;
+  title: string;
+  state: 'planning' | 'coding' | 'testing' | 'blocked' | 'done';
+  startedAt: string;
+  lastHeartbeatAt: string;
+}
+
+interface AgentEvent {
+  id: string;
+  sessionId: string;
+  type: 'status' | 'action' | 'artifact' | 'blocker' | 'summary';
+  message: string;
+  createdAt: string;
+}
+
+const projects: Project[] = [
+  { id: 'core', name: 'Core / Other' },
+  { id: 'demo-calc', name: 'Demo: Scientific Calculator' },
+  { id: 'demo-weather', name: 'Demo: CLI Weather App' }
+];
+
+const stories: Story[] = [
+  {
+    id: 's1',
+    projectId: 'core',
+    title: 'Setup Bolt foundation',
+    description: 'Monorepo + initial docs + basic app shells',
+    status: 'in_progress',
+    priority: 'high',
+    blocked: false,
+    assignee: 'Claudio',
+    updatedAt: new Date().toISOString()
+  }
+];
+
+const notes: Note[] = [];
+const dependencies: Dependency[] = [];
+const files: FileAsset[] = [];
+const agentSessions: AgentSession[] = [
+  {
+    id: 'agent-main',
+    projectId: 'core',
+    title: 'Build Bolt milestones',
+    state: 'coding',
+    startedAt: new Date(Date.now() - 1000 * 60 * 20).toISOString(),
+    lastHeartbeatAt: new Date().toISOString()
+  }
+];
+const agentEvents: AgentEvent[] = [
+  {
+    id: randomUUID(),
+    sessionId: 'agent-main',
+    type: 'status',
+    message: 'Milestone started: file context + agent dashboard',
+    createdAt: new Date(Date.now() - 1000 * 60 * 15).toISOString()
+  }
+];
 
 app.get('/health', async () => ({ ok: true }));
 
+app.get('/api/v1/projects', async () => ({ data: projects }));
+
+app.post('/api/v1/projects', async (req, reply) => {
+  const body = req.body as Partial<Project> & { name: string };
+  if (!body?.name?.trim()) return reply.status(400).send({ error: 'name is required' });
+  const project: Project = { id: randomUUID(), name: body.name.trim(), description: body.description };
+  projects.push(project);
+  return reply.status(201).send({ data: project });
+});
+
+app.patch('/api/v1/projects/:id', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const body = req.body as Partial<Project>;
+  const project = projects.find((p) => p.id === id);
+  if (!project) return reply.status(404).send({ error: 'project not found' });
+
+  if (body.name?.trim()) project.name = body.name.trim();
+  project.description = body.description;
+  return { data: project };
+});
+
 app.get('/api/v1/stories', async (req) => {
-  const q = req.query as { status?: StoryStatus; limit?: string; fields?: string };
-  const limit = Math.min(Number(q.limit ?? 50), 100);
-  const data = await prisma.story.findMany({
-    where: {
-      projectId: DEFAULT_PROJECT_ID,
-      ...(q.status ? { status: q.status } : {})
-    },
-    orderBy: { updatedAt: 'desc' },
-    take: limit,
-    select: {
-      id: true,
-      title: true,
-      description: true,
-      status: true,
-      priority: true,
-      blocked: true,
-      assignee: true,
-      updatedAt: true
-    }
-  });
+  const q = req.query as { status?: StoryStatus; projectId?: string };
+  let data = stories;
+  if (q.projectId && q.projectId !== 'all') data = data.filter((s) => s.projectId === q.projectId);
+  if (q.status) data = data.filter((s) => s.status === q.status);
   return { data };
 });
 
 app.post('/api/v1/stories', async (req, reply) => {
-  const body = req.body as any;
-  if (!body?.title) return reply.status(400).send({ error: 'title is required' });
+  const body = req.body as Partial<Story> & { title: string };
+  if (!body.title) return reply.status(400).send({ error: 'title is required' });
 
-  const data = await prisma.story.create({
-    data: {
-      projectId: DEFAULT_PROJECT_ID,
-      title: body.title,
-      description: body.description,
-      acceptanceCriteria: body.acceptanceCriteria,
-      status: body.status ?? 'waiting',
-      priority: body.priority ?? 'med',
-      blocked: body.blocked ?? false,
-      points: body.points,
-      assignee: body.assignee,
-      dueAt: body.dueAt ? new Date(body.dueAt) : null,
-    }
-  });
+  const story: Story = {
+    id: randomUUID(),
+    projectId: body.projectId ?? 'core',
+    title: body.title,
+    description: body.description,
+    acceptanceCriteria: body.acceptanceCriteria,
+    status: body.status ?? 'waiting',
+    priority: body.priority ?? 'med',
+    blocked: body.blocked ?? false,
+    points: body.points,
+    assignee: body.assignee,
+    dueAt: body.dueAt,
+    updatedAt: new Date().toISOString()
+  };
 
-  await prisma.agentEvent.create({
-    data: {
-      sessionId: (await prisma.agentSession.findFirstOrThrow({ where: { projectId: DEFAULT_PROJECT_ID }, select: { id: true } })).id,
-      type: 'action',
-      message: `Story created: ${data.title}`
-    }
-  });
-
-  return reply.status(201).send({ data });
+  stories.unshift(story);
+  agentEvents.unshift({ id: randomUUID(), sessionId: 'agent-main', type: 'action', message: `Story created: ${story.title}`, createdAt: new Date().toISOString() });
+  return reply.status(201).send({ data: story });
 });
 
 app.patch('/api/v1/stories/:id', async (req, reply) => {
   const { id } = req.params as { id: string };
-  const body = req.body as any;
+  const body = req.body as Partial<Story>;
+  const story = stories.find((s) => s.id === id);
+  if (!story) return reply.status(404).send({ error: 'story not found' });
 
-  try {
-    const data = await prisma.story.update({
-      where: { id },
-      data: {
-        title: body.title,
-        description: body.description,
-        priority: body.priority,
-        assignee: body.assignee,
-        blocked: body.blocked,
-      }
-    });
-    return { data };
-  } catch {
-    return reply.status(404).send({ error: 'story not found' });
-  }
+  Object.assign(story, body, { updatedAt: new Date().toISOString() });
+  return { data: story };
 });
 
 app.post('/api/v1/stories/:id/move', async (req, reply) => {
   const { id } = req.params as { id: string };
   const { status } = req.body as { status: StoryStatus };
-
-  try {
-    const data = await prisma.story.update({ where: { id }, data: { status } });
-    const session = await prisma.agentSession.findFirst({ where: { projectId: DEFAULT_PROJECT_ID }, select: { id: true } });
-    if (session) {
-      await prisma.agentEvent.create({ data: { sessionId: session.id, type: 'status', message: `Story moved: ${data.title} -> ${status}` } });
-    }
-    return { data };
-  } catch {
-    return reply.status(404).send({ error: 'story not found' });
-  }
+  const story = stories.find((s) => s.id === id);
+  if (!story) return reply.status(404).send({ error: 'story not found' });
+  story.status = status;
+  story.updatedAt = new Date().toISOString();
+  agentEvents.unshift({ id: randomUUID(), sessionId: 'agent-main', type: 'status', message: `Story moved: ${story.title} -> ${status}`, createdAt: new Date().toISOString() });
+  return { data: story };
 });
 
 app.get('/api/v1/stories/:id/notes', async (req) => {
   const { id } = req.params as { id: string };
-  const data = await prisma.storyNote.findMany({ where: { storyId: id }, orderBy: { createdAt: 'desc' }, take: 100 });
-  return { data };
+  return { data: notes.filter((n) => n.storyId === id) };
 });
 
 app.post('/api/v1/stories/:id/notes', async (req, reply) => {
   const { id } = req.params as { id: string };
   const body = req.body as { body: string; author?: string };
+  const story = stories.find((s) => s.id === id);
+  if (!story) return reply.status(404).send({ error: 'story not found' });
   if (!body?.body?.trim()) return reply.status(400).send({ error: 'body is required' });
 
-  const story = await prisma.story.findUnique({ where: { id }, select: { id: true } });
-  if (!story) return reply.status(404).send({ error: 'story not found' });
+  const note: Note = {
+    id: randomUUID(),
+    storyId: id,
+    author: body.author ?? 'you',
+    body: body.body,
+    createdAt: new Date().toISOString()
+  };
 
-  const data = await prisma.storyNote.create({
-    data: { storyId: id, body: body.body, author: body.author ?? 'you', kind: 'note' }
-  });
-  return reply.status(201).send({ data });
+  notes.unshift(note);
+  return reply.status(201).send({ data: note });
 });
 
 app.get('/api/v1/stories/:id/dependencies', async (req) => {
   const { id } = req.params as { id: string };
-  const data = await prisma.storyDependency.findMany({ where: { storyId: id }, orderBy: { createdAt: 'desc' }, take: 100 });
-  return { data };
+  return { data: dependencies.filter((d) => d.storyId === id) };
 });
 
 app.post('/api/v1/stories/:id/dependencies', async (req, reply) => {
   const { id } = req.params as { id: string };
   const body = req.body as { dependsOnStoryId: string };
+  const story = stories.find((s) => s.id === id);
+  if (!story) return reply.status(404).send({ error: 'story not found' });
   if (!body?.dependsOnStoryId) return reply.status(400).send({ error: 'dependsOnStoryId is required' });
 
-  const [story, dependsOn] = await Promise.all([
-    prisma.story.findUnique({ where: { id }, select: { id: true } }),
-    prisma.story.findUnique({ where: { id: body.dependsOnStoryId }, select: { id: true } })
-  ]);
-  if (!story) return reply.status(404).send({ error: 'story not found' });
-  if (!dependsOn) return reply.status(404).send({ error: 'dependsOn story not found' });
+  const dependency: Dependency = {
+    id: randomUUID(),
+    storyId: id,
+    dependsOnStoryId: body.dependsOnStoryId
+  };
 
-  const data = await prisma.storyDependency.upsert({
-    where: { storyId_dependsOnStoryId: { storyId: id, dependsOnStoryId: body.dependsOnStoryId } },
-    update: {},
-    create: { storyId: id, dependsOnStoryId: body.dependsOnStoryId }
-  });
-
-  await prisma.story.update({ where: { id }, data: { blocked: true } });
-  return reply.status(201).send({ data });
+  dependencies.push(dependency);
+  story.blocked = true;
+  story.updatedAt = new Date().toISOString();
+  return reply.status(201).send({ data: dependency });
 });
 
 app.get('/api/v1/files', async (req) => {
-  const q = req.query as { storyId?: string; limit?: string };
-  const data = await prisma.fileAsset.findMany({
-    where: { projectId: DEFAULT_PROJECT_ID, ...(q.storyId ? { storyId: q.storyId } : {}) },
-    orderBy: { createdAt: 'desc' },
-    take: Math.min(Number(q.limit ?? 100), 200)
-  });
+  const q = req.query as { storyId?: string; projectId?: string };
+  let data = files;
+  if (q.projectId && q.projectId !== 'all') data = data.filter((f) => f.projectId === q.projectId);
+  if (q.storyId) data = data.filter((f) => f.storyId === q.storyId);
   return { data };
 });
 
 app.post('/api/v1/files', async (req, reply) => {
-  const body = req.body as any;
-  if (!body?.filename) return reply.status(400).send({ error: 'filename is required' });
+  const body = req.body as Partial<FileAsset> & { filename: string; projectId?: string };
+  if (!body.filename) return reply.status(400).send({ error: 'filename is required' });
 
-  const data = await prisma.fileAsset.create({
-    data: {
-      projectId: DEFAULT_PROJECT_ID,
-      storyId: body.storyId,
-      filename: body.filename,
-      contentType: body.contentType ?? 'application/octet-stream',
-      byteSize: body.byteSize ?? 0,
-      storageKey: body.storageKey ?? `uploads/${Date.now()}-${body.filename}`,
-      uploadedBy: body.uploadedBy ?? 'you'
-    }
-  });
+  const file: FileAsset = {
+    id: randomUUID(),
+    projectId: body.projectId ?? 'core',
+    storyId: body.storyId,
+    filename: body.filename,
+    contentType: body.contentType ?? 'application/octet-stream',
+    byteSize: body.byteSize ?? 0,
+    storageKey: body.storageKey ?? `uploads/${Date.now()}-${body.filename}`,
+    uploadedBy: body.uploadedBy ?? 'you',
+    createdAt: new Date().toISOString()
+  };
 
-  const session = await prisma.agentSession.findFirst({ where: { projectId: DEFAULT_PROJECT_ID }, select: { id: true } });
-  if (session) {
-    await prisma.agentEvent.create({ data: { sessionId: session.id, type: 'artifact', message: `Context file added: ${data.filename}` } });
-  }
-
-  return reply.status(201).send({ data });
+  files.unshift(file);
+  agentEvents.unshift({ id: randomUUID(), sessionId: 'agent-main', type: 'artifact', message: `Context file added: ${file.filename}`, createdAt: new Date().toISOString() });
+  return reply.status(201).send({ data: file });
 });
 
-app.get('/api/v1/agent/sessions', async () => {
-  const data = await prisma.agentSession.findMany({ where: { projectId: DEFAULT_PROJECT_ID }, orderBy: { createdAt: 'desc' }, take: 10 });
+app.get('/api/v1/agent/sessions', async (req) => {
+  const q = req.query as { projectId?: string };
+  const data = q.projectId && q.projectId !== 'all'
+    ? agentSessions.filter((s) => s.projectId === q.projectId)
+    : agentSessions;
   return { data };
 });
 
 app.get('/api/v1/agent/sessions/:id/events', async (req) => {
   const { id } = req.params as { id: string };
-  const data = await prisma.agentEvent.findMany({ where: { sessionId: id }, orderBy: { createdAt: 'desc' }, take: 100 });
-  return { data };
+  return { data: agentEvents.filter((e) => e.sessionId === id) };
 });
 
 app.post('/api/v1/agent/sessions/:id/events', async (req, reply) => {
   const { id } = req.params as { id: string };
-  const body = req.body as { type?: string; message: string };
+  const body = req.body as { type: AgentEvent['type']; message: string };
+  const session = agentSessions.find((s) => s.id === id);
+  if (!session) return reply.status(404).send({ error: 'session not found' });
   if (!body?.message) return reply.status(400).send({ error: 'message is required' });
 
-  const session = await prisma.agentSession.findUnique({ where: { id }, select: { id: true } });
-  if (!session) return reply.status(404).send({ error: 'session not found' });
-
-  const data = await prisma.agentEvent.create({ data: { sessionId: id, type: body.type ?? 'action', message: body.message } });
-  await prisma.agentSession.update({ where: { id }, data: { lastHeartbeatAt: new Date() } });
-  return reply.status(201).send({ data });
+  const evt: AgentEvent = {
+    id: randomUUID(),
+    sessionId: id,
+    type: body.type ?? 'action',
+    message: body.message,
+    createdAt: new Date().toISOString()
+  };
+  session.lastHeartbeatAt = new Date().toISOString();
+  agentEvents.unshift(evt);
+  return reply.status(201).send({ data: evt });
 });
 
-app.get('/api/v1/digests/project/default/daily', async () => {
-  const [waiting, inProgress, completed, blocked, recentEvents] = await Promise.all([
-    prisma.story.count({ where: { projectId: DEFAULT_PROJECT_ID, status: 'waiting' } }),
-    prisma.story.count({ where: { projectId: DEFAULT_PROJECT_ID, status: 'in_progress' } }),
-    prisma.story.count({ where: { projectId: DEFAULT_PROJECT_ID, status: 'completed' } }),
-    prisma.story.findMany({ where: { projectId: DEFAULT_PROJECT_ID, blocked: true }, select: { id: true, title: true }, take: 20 }),
-    prisma.agentEvent.findMany({ orderBy: { createdAt: 'desc' }, take: 5, select: { message: true } })
-  ]);
+app.get('/api/v1/digests/project/:projectId/daily', async (req) => {
+  const { projectId } = req.params as { projectId: string };
+  const projectStories = projectId === 'all' ? stories : stories.filter((s) => s.projectId === projectId);
+  const counts = {
+    waiting: projectStories.filter((s) => s.status === 'waiting').length,
+    in_progress: projectStories.filter((s) => s.status === 'in_progress').length,
+    completed: projectStories.filter((s) => s.status === 'completed').length,
+  };
+
+  const blocked = projectStories.filter((s) => s.blocked).map((s) => ({ id: s.id, title: s.title }));
+  const recent = agentEvents.slice(0, 5).map((e) => e.message);
 
   return {
     data: {
-      counts: { waiting, in_progress: inProgress, completed },
+      counts,
       blocked,
-      recent_activity: recentEvents.map((e) => e.message),
+      recent_activity: recent,
       next_actions: blocked.length ? ['Unblock blocked stories'] : ['Move waiting stories into progress']
     }
   };
 });
 
 const port = Number(process.env.PORT || 4000);
-
-await ensureDefaults();
-
 app.listen({ port, host: '0.0.0.0' }).catch((err) => {
   app.log.error(err);
   process.exit(1);
 });
-
-for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(sig, async () => {
-    await prisma.$disconnect();
-    process.exit(0);
-  });
-}

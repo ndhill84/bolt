@@ -3,6 +3,7 @@ export type Priority = 'low' | 'med' | 'high' | 'urgent'
 
 export type Story = {
   id: string
+  projectId?: string
   title: string
   description?: string
   status: StoryStatus
@@ -10,6 +11,12 @@ export type Story = {
   blocked: boolean
   assignee?: string
   updatedAt: string
+}
+
+export type Project = {
+  id: string
+  name: string
+  description?: string
 }
 
 export type Note = {
