@@ -6,14 +6,14 @@
 
 Bolt is a purpose-built workspace for running software sprints with an AI teammate — planning, execution, context, and visibility in one place.
 
-[![Status](https://img.shields.io/badge/status-active_development-22c55e?style=flat-square)](https://github.com/ndhill84/bolt)
-[![Collaboration](https://img.shields.io/badge/mode-human_%2B_ai_collaboration-8b5cf6?style=flat-square)](https://github.com/ndhill84/bolt)
-[![Frontend](https://img.shields.io/badge/frontend-React_%2B_Vite-61dafb?style=flat-square)](https://vitejs.dev/)
-[![Backend](https://img.shields.io/badge/backend-Fastify-000000?style=flat-square)](https://fastify.dev/)
-[![Language](https://img.shields.io/badge/language-TypeScript-3178c6?style=flat-square)](https://www.typescriptlang.org/)
-[![ORM](https://img.shields.io/badge/orm-Prisma-2d3748?style=flat-square)](https://www.prisma.io/)
-[![Database](https://img.shields.io/badge/database-SQLite-003b57?style=flat-square)](https://www.sqlite.org/)
-[![Storage](https://img.shields.io/badge/storage-Local_File_System-0f766e?style=flat-square)](https://en.wikipedia.org/wiki/File_system)
+[![Status](https://img.shields.io/badge/status-active_development-22c55e?logo=github)](https://github.com/ndhill84/bolt)
+[![Collaboration](https://img.shields.io/badge/mode-human_%2B_ai_collaboration-8b5cf6?logo=openai)](https://github.com/ndhill84/bolt)
+[![Frontend](https://img.shields.io/badge/frontend-React_%2B_Vite-61dafb?logo=react)](https://vitejs.dev/)
+[![Backend](https://img.shields.io/badge/backend-Fastify-000000?logo=fastify)](https://fastify.dev/)
+[![Language](https://img.shields.io/badge/language-TypeScript-3178c6?logo=typescript)](https://www.typescriptlang.org/)
+[![ORM](https://img.shields.io/badge/orm-Prisma-2d3748?logo=prisma)](https://www.prisma.io/)
+[![Database](https://img.shields.io/badge/database-SQLite-003b57?logo=sqlite)](https://www.sqlite.org/)
+[![Storage](https://img.shields.io/badge/storage-Local_File_System-0f766e?logo=files)](https://en.wikipedia.org/wiki/File_system)
 
 </div>
 
