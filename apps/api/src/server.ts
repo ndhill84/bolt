@@ -755,6 +755,10 @@ app.get('/api/v1/digests/project/:projectId/daily', async (req) => {
   };
 });
 
+app.addHook('onClose', async () => {
+  await prisma.$disconnect();
+});
+
 async function start() {
   await ensureDataLayout();
   await applySqlitePragmas();
@@ -765,7 +769,3 @@ async function start() {
 }
 
 await start();
-
-app.addHook('onClose', async () => {
-  await prisma.$disconnect();
-});
