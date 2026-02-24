@@ -8,7 +8,8 @@ type Props = {
   dependencies: StoryDependency[]
   files: FileAsset[]
   newNote: string
-  newDependencyId: string
+  newDependencyIds: string[]
+  dependencyOptions: Array<{ id: string; title: string }>
   newFilename: string
   onClose: () => void
   onSectionChange: (section: DrawerSection) => void
@@ -16,7 +17,7 @@ type Props = {
   isCreatingStory?: boolean
   onSaveStory: () => Promise<void>
   onNewNoteChange: (value: string) => void
-  onNewDependencyIdChange: (value: string) => void
+  onNewDependencyIdsChange: (value: string[]) => void
   onNewFilenameChange: (value: string) => void
   onAddNote: () => Promise<void>
   onAddDependency: () => Promise<void>
@@ -33,7 +34,8 @@ export function StoryDrawer({
   dependencies,
   files,
   newNote,
-  newDependencyId,
+  newDependencyIds,
+  dependencyOptions,
   newFilename,
   onClose,
   onSectionChange,
@@ -41,7 +43,7 @@ export function StoryDrawer({
   isCreatingStory,
   onSaveStory,
   onNewNoteChange,
-  onNewDependencyIdChange,
+  onNewDependencyIdsChange,
   onNewFilenameChange,
   onAddNote,
   onAddDependency,
@@ -139,12 +141,36 @@ export function StoryDrawer({
                     />
 
                     <label className="drawer-label">Dependencies</label>
-                    <input
-                      className="input-field"
-                      placeholder="Optional: story IDs (comma-separated)"
-                      value={newDependencyId}
-                      onChange={(event) => onNewDependencyIdChange(event.target.value)}
-                    />
+                    <div className="grid gap-2">
+                      {newDependencyIds.map((depId, idx) => (
+                        <select
+                          key={`dep-${idx}`}
+                          className="input-field"
+                          value={depId}
+                          onChange={(event) => {
+                            const next = [...newDependencyIds]
+                            next[idx] = event.target.value
+                            onNewDependencyIdsChange(next)
+                          }}
+                        >
+                          <option value="">Select dependency story</option>
+                          {dependencyOptions.map((opt) => (
+                            <option key={opt.id} value={opt.id}>
+                              {opt.title}
+                            </option>
+                          ))}
+                        </select>
+                      ))}
+                      <div>
+                        <button
+                          type="button"
+                          className="ghost-btn"
+                          onClick={() => onNewDependencyIdsChange([...newDependencyIds, ''])}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
                   </>
                 )}
 
@@ -229,12 +255,18 @@ export function StoryDrawer({
                     {!dependencies.length && <p className="text-xs text-[var(--color-text-muted)]">No dependencies.</p>}
                   </div>
                 </div>
-                <input
+                <select
                   className="input-field"
-                  placeholder="Depends on story ID"
-                  value={newDependencyId}
-                  onChange={(event) => onNewDependencyIdChange(event.target.value)}
-                />
+                  value={newDependencyIds[0] ?? ''}
+                  onChange={(event) => onNewDependencyIdsChange([event.target.value])}
+                >
+                  <option value="">Select dependency story</option>
+                  {dependencyOptions.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.title}
+                    </option>
+                  ))}
+                </select>
                 <button type="button" className="primary-btn" onClick={() => void onAddDependency()}>
                   Add Dependency
                 </button>

@@ -36,7 +36,7 @@ function App() {
 
   const [isCreatingStory, setIsCreatingStory] = useState(false)
   const [newNote, setNewNote] = useState('')
-  const [newDependencyId, setNewDependencyId] = useState('')
+  const [newDependencyIds, setNewDependencyIds] = useState<string[]>([''])
   const [newFilename, setNewFilename] = useState('')
 
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -286,6 +286,8 @@ function App() {
     setNotes([])
     setDependencies([])
     setFiles([])
+    setNewNote('')
+    setNewDependencyIds([''])
   }
 
   async function moveStory(story: Story, status: StoryStatus) {
@@ -341,10 +343,7 @@ function App() {
           })
         }
 
-        const depIds = newDependencyId
-          .split(',')
-          .map((item) => item.trim())
-          .filter(Boolean)
+        const depIds = newDependencyIds.map((item) => item.trim()).filter(Boolean)
 
         for (const depId of depIds) {
           await fetch(`${API}/stories/${createdId}/dependencies`, {
@@ -356,7 +355,7 @@ function App() {
       }
 
       setNewNote('')
-      setNewDependencyId('')
+      setNewDependencyIds([''])
       setIsCreatingStory(false)
       setDrawerOpen(false)
       setSelectedStory(null)
@@ -414,15 +413,16 @@ function App() {
   }
 
   async function addDependency() {
-    if (!selectedStory || !newDependencyId.trim()) return
+    const depId = newDependencyIds[0]?.trim()
+    if (!selectedStory || !depId) return
 
     await fetch(`${API}/stories/${selectedStory.id}/dependencies`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ dependsOnStoryId: newDependencyId }),
+      body: JSON.stringify({ dependsOnStoryId: depId }),
     })
 
-    setNewDependencyId('')
+    setNewDependencyIds([''])
     await Promise.all([loadDependencies(selectedStory.id), loadStories(selectedProjectId)])
   }
 
@@ -509,20 +509,23 @@ function App() {
         dependencies={dependencies}
         files={files}
         newNote={newNote}
-        newDependencyId={newDependencyId}
+        newDependencyIds={newDependencyIds}
+        dependencyOptions={stories
+          .filter((story) => (selectedProjectId === 'all' ? true : story.projectId === selectedProjectId) && story.id !== selectedStory?.id)
+          .map((story) => ({ id: story.id, title: story.title }))}
         newFilename={newFilename}
         onClose={() => {
           setDrawerOpen(false)
           setIsCreatingStory(false)
           setNewNote('')
-          setNewDependencyId('')
+          setNewDependencyIds([''])
         }}
         onSectionChange={setDrawerSection}
         onStoryChange={setSelectedStory}
         isCreatingStory={isCreatingStory}
         onSaveStory={saveStoryEdit}
         onNewNoteChange={setNewNote}
-        onNewDependencyIdChange={setNewDependencyId}
+        onNewDependencyIdsChange={setNewDependencyIds}
         onNewFilenameChange={setNewFilename}
         onAddNote={addNote}
         onAddDependency={addDependency}
