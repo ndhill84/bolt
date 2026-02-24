@@ -20,7 +20,9 @@ Bolt is a purpose-built workspace for running software sprints with an AI teamma
 
 ## What Bolt is
 
-**Bolt is a collaborative software development tool designed specifically for Nick + OpenClaw to build projects together.**
+**WARNING: project is in active development**
+
+**Bolt is a collaborative software development tool designed specifically for you + OpenClaw to build projects together.**
 
 It combines sprint planning, execution tracking, project context, and AI activity visibility so both the human and the agent can stay aligned and ship faster.
 
