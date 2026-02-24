@@ -36,6 +36,34 @@ interface Dependency {
   dependsOnStoryId: string;
 }
 
+interface FileAsset {
+  id: string;
+  projectId: string;
+  storyId?: string;
+  filename: string;
+  contentType: string;
+  byteSize: number;
+  storageKey: string;
+  uploadedBy: string;
+  createdAt: string;
+}
+
+interface AgentSession {
+  id: string;
+  title: string;
+  state: 'planning' | 'coding' | 'testing' | 'blocked' | 'done';
+  startedAt: string;
+  lastHeartbeatAt: string;
+}
+
+interface AgentEvent {
+  id: string;
+  sessionId: string;
+  type: 'status' | 'action' | 'artifact' | 'blocker' | 'summary';
+  message: string;
+  createdAt: string;
+}
+
 const stories: Story[] = [
   {
     id: 's1',
@@ -51,6 +79,25 @@ const stories: Story[] = [
 
 const notes: Note[] = [];
 const dependencies: Dependency[] = [];
+const files: FileAsset[] = [];
+const agentSessions: AgentSession[] = [
+  {
+    id: 'agent-main',
+    title: 'Build Bolt milestones',
+    state: 'coding',
+    startedAt: new Date(Date.now() - 1000 * 60 * 20).toISOString(),
+    lastHeartbeatAt: new Date().toISOString()
+  }
+];
+const agentEvents: AgentEvent[] = [
+  {
+    id: randomUUID(),
+    sessionId: 'agent-main',
+    type: 'status',
+    message: 'Milestone started: file context + agent dashboard',
+    createdAt: new Date(Date.now() - 1000 * 60 * 15).toISOString()
+  }
+];
 
 app.get('/health', async () => ({ ok: true }));
 
@@ -79,6 +126,7 @@ app.post('/api/v1/stories', async (req, reply) => {
   };
 
   stories.unshift(story);
+  agentEvents.unshift({ id: randomUUID(), sessionId: 'agent-main', type: 'action', message: `Story created: ${story.title}`, createdAt: new Date().toISOString() });
   return reply.status(201).send({ data: story });
 });
 
@@ -99,6 +147,7 @@ app.post('/api/v1/stories/:id/move', async (req, reply) => {
   if (!story) return reply.status(404).send({ error: 'story not found' });
   story.status = status;
   story.updatedAt = new Date().toISOString();
+  agentEvents.unshift({ id: randomUUID(), sessionId: 'agent-main', type: 'status', message: `Story moved: ${story.title} -> ${status}`, createdAt: new Date().toISOString() });
   return { data: story };
 });
 
@@ -150,17 +199,78 @@ app.post('/api/v1/stories/:id/dependencies', async (req, reply) => {
   return reply.status(201).send({ data: dependency });
 });
 
+app.get('/api/v1/files', async (req) => {
+  const q = req.query as { storyId?: string };
+  const data = q.storyId ? files.filter((f) => f.storyId === q.storyId) : files;
+  return { data };
+});
+
+app.post('/api/v1/files', async (req, reply) => {
+  const body = req.body as Partial<FileAsset> & { filename: string; projectId?: string };
+  if (!body.filename) return reply.status(400).send({ error: 'filename is required' });
+
+  const file: FileAsset = {
+    id: randomUUID(),
+    projectId: body.projectId ?? 'default',
+    storyId: body.storyId,
+    filename: body.filename,
+    contentType: body.contentType ?? 'application/octet-stream',
+    byteSize: body.byteSize ?? 0,
+    storageKey: body.storageKey ?? `uploads/${Date.now()}-${body.filename}`,
+    uploadedBy: body.uploadedBy ?? 'Nick',
+    createdAt: new Date().toISOString()
+  };
+
+  files.unshift(file);
+  agentEvents.unshift({ id: randomUUID(), sessionId: 'agent-main', type: 'artifact', message: `Context file added: ${file.filename}`, createdAt: new Date().toISOString() });
+  return reply.status(201).send({ data: file });
+});
+
 app.get('/api/v1/agent/sessions', async () => {
+  return { data: agentSessions };
+});
+
+app.get('/api/v1/agent/sessions/:id/events', async (req) => {
+  const { id } = req.params as { id: string };
+  return { data: agentEvents.filter((e) => e.sessionId === id) };
+});
+
+app.post('/api/v1/agent/sessions/:id/events', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const body = req.body as { type: AgentEvent['type']; message: string };
+  const session = agentSessions.find((s) => s.id === id);
+  if (!session) return reply.status(404).send({ error: 'session not found' });
+  if (!body?.message) return reply.status(400).send({ error: 'message is required' });
+
+  const evt: AgentEvent = {
+    id: randomUUID(),
+    sessionId: id,
+    type: body.type ?? 'action',
+    message: body.message,
+    createdAt: new Date().toISOString()
+  };
+  session.lastHeartbeatAt = new Date().toISOString();
+  agentEvents.unshift(evt);
+  return reply.status(201).send({ data: evt });
+});
+
+app.get('/api/v1/digests/project/default/daily', async () => {
+  const counts = {
+    waiting: stories.filter((s) => s.status === 'waiting').length,
+    in_progress: stories.filter((s) => s.status === 'in_progress').length,
+    completed: stories.filter((s) => s.status === 'completed').length,
+  };
+
+  const blocked = stories.filter((s) => s.blocked).map((s) => ({ id: s.id, title: s.title }));
+  const recent = agentEvents.slice(0, 5).map((e) => e.message);
+
   return {
-    data: [
-      {
-        id: 'agent-main',
-        title: 'Build core board workflow',
-        state: 'coding',
-        startedAt: new Date(Date.now() - 1000 * 60 * 14).toISOString(),
-        lastHeartbeatAt: new Date().toISOString()
-      }
-    ]
+    data: {
+      counts,
+      blocked,
+      recent_activity: recent,
+      next_actions: blocked.length ? ['Unblock blocked stories'] : ['Move waiting stories into progress']
+    }
   };
 });
 
