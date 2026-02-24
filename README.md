@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="assets/bolt-logo.svg" alt="Bolt logo" width="120" />
 
 # ⚡ Bolt
 ### Build software faster — together.
