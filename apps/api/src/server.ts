@@ -133,6 +133,17 @@ async function refreshBlocked(storyId: string) {
   await prisma.story.update({ where: { id: storyId }, data: { blocked } });
 }
 
+async function refreshBlockedForDependents(dependsOnStoryId: string) {
+  const dependents = await prisma.storyDependency.findMany({
+    where: { dependsOnStoryId },
+    select: { storyId: true },
+  });
+
+  await Promise.all(
+    dependents.map((dep) => refreshBlocked(dep.storyId)),
+  );
+}
+
 function parseLimit(raw?: string): number {
   if (!raw) return DEFAULT_LIMIT;
   const parsed = Number.parseInt(raw, 10);
@@ -369,6 +380,7 @@ app.post('/api/v1/stories/:id/move', async (req, reply) => {
   if (!existing) return reply.status(404).send({ error: 'story not found' });
 
   const story = await prisma.story.update({ where: { id }, data: { status } });
+  await refreshBlockedForDependents(id);
 
   const session = await prisma.agentSession.findFirst({ where: { projectId: story.projectId }, orderBy: { createdAt: 'asc' } });
   if (session) {
@@ -390,10 +402,17 @@ app.delete('/api/v1/stories/:id', async (req, reply) => {
   const story = await prisma.story.findUnique({ where: { id } });
   if (!story) return reply.status(404).send({ error: 'story not found' });
 
+  const dependentStoryIds = await prisma.storyDependency.findMany({
+    where: { dependsOnStoryId: id },
+    select: { storyId: true },
+  });
+
   await prisma.$transaction([
     prisma.fileAsset.deleteMany({ where: { storyId: id } }),
     prisma.story.delete({ where: { id } }),
   ]);
+
+  await Promise.all(dependentStoryIds.map((dep) => refreshBlocked(dep.storyId)));
 
   return { data: { id, deleted: true } };
 });
@@ -478,6 +497,7 @@ app.post('/api/v1/stories/:id/dependencies', async (req, reply) => {
   const story = await prisma.story.findUnique({ where: { id } });
   if (!story) return reply.status(404).send({ error: 'story not found' });
   if (!body?.dependsOnStoryId) return reply.status(400).send({ error: 'dependsOnStoryId is required' });
+  if (body.dependsOnStoryId === id) return reply.status(400).send({ error: 'story cannot depend on itself' });
 
   const dependencyTarget = await prisma.story.findUnique({ where: { id: body.dependsOnStoryId } });
   if (!dependencyTarget) return reply.status(404).send({ error: 'dependsOn story not found' });
