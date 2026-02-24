@@ -8,21 +8,99 @@ datasource db {
 }
 
 model Project {
-  id        String   @id @default(uuid())
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  stories   Story[]
+  id            String         @id @default(uuid())
+  name          String
+  description   String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  stories       Story[]
+  files         FileAsset[]
+  agentSessions AgentSession[]
 }
 
 model Story {
-  id         String   @id @default(uuid())
-  projectId  String
-  title      String
-  status     String   @default("waiting")
-  priority   String   @default("med")
-  blocked    Boolean  @default(false)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  project    Project  @relation(fields: [projectId], references: [id])
+  id                 String            @id @default(uuid())
+  projectId          String
+  title              String
+  description        String?
+  acceptanceCriteria String?
+  status             String            @default("waiting")
+  priority           String            @default("med")
+  blocked            Boolean           @default(false)
+  points             Int?
+  assignee           String?
+  dueAt              DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  project            Project           @relation(fields: [projectId], references: [id])
+  notes              StoryNote[]
+  dependencies       StoryDependency[] @relation("StoryDepends")
+  dependentOf        StoryDependency[] @relation("StoryDependents")
+  files              FileAsset[]
+
+  @@index([projectId, status])
+}
+
+model StoryNote {
+  id        String   @id @default(uuid())
+  storyId   String
+  author    String
+  body      String
+  kind      String   @default("note")
+  createdAt DateTime @default(now())
+  story     Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+
+  @@index([storyId, createdAt])
+}
+
+model StoryDependency {
+  id               String   @id @default(uuid())
+  storyId          String
+  dependsOnStoryId String
+  createdAt        DateTime @default(now())
+  story            Story    @relation("StoryDepends", fields: [storyId], references: [id], onDelete: Cascade)
+  dependsOn        Story    @relation("StoryDependents", fields: [dependsOnStoryId], references: [id], onDelete: Cascade)
+
+  @@unique([storyId, dependsOnStoryId])
+}
+
+model FileAsset {
+  id          String   @id @default(uuid())
+  projectId   String
+  storyId     String?
+  filename    String
+  contentType String
+  byteSize    Int      @default(0)
+  storageKey  String
+  uploadedBy  String
+  createdAt   DateTime @default(now())
+  project     Project  @relation(fields: [projectId], references: [id])
+  story       Story?   @relation(fields: [storyId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, storyId, createdAt])
+}
+
+model AgentSession {
+  id              String       @id @default(uuid())
+  projectId       String
+  title           String
+  state           String
+  startedAt       DateTime     @default(now())
+  lastHeartbeatAt DateTime
+  createdAt       DateTime     @default(now())
+  project         Project      @relation(fields: [projectId], references: [id])
+  events          AgentEvent[]
+
+  @@index([projectId, state])
+}
+
+model AgentEvent {
+  id        String       @id @default(uuid())
+  sessionId String
+  type      String
+  message   String
+  createdAt DateTime     @default(now())
+  session   AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
 }

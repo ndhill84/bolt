@@ -1,6 +1,7 @@
 node_modules
 .env
 .env.*
+!apps/api/.env.example
 .DS_Store
 dist
 build
