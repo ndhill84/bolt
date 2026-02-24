@@ -71,23 +71,25 @@ export function StoryDrawer({
           <p className="text-sm text-[var(--color-text-muted)]">Select a story to see details.</p>
         ) : (
           <>
-            <div className="mb-3 flex flex-wrap gap-1">
-              {sections.map((entry) => (
-                <button
-                  key={entry}
-                  type="button"
-                  className="rounded-md border px-2 py-1 text-xs font-semibold uppercase"
-                  style={{
-                    borderColor: activeSection === entry ? 'var(--color-accent)' : 'var(--color-border-soft)',
-                    color: activeSection === entry ? 'var(--color-accent)' : 'var(--color-text-subtle)',
-                    backgroundColor: activeSection === entry ? 'color-mix(in oklab, var(--color-accent) 16%, transparent)' : 'transparent',
-                  }}
-                  onClick={() => onSectionChange(entry)}
-                >
-                  {entry}
-                </button>
-              ))}
-            </div>
+            {!isCreatingStory && (
+              <div className="mb-3 flex flex-wrap gap-1">
+                {sections.map((entry) => (
+                  <button
+                    key={entry}
+                    type="button"
+                    className="rounded-md border px-2 py-1 text-xs font-semibold uppercase"
+                    style={{
+                      borderColor: activeSection === entry ? 'var(--color-accent)' : 'var(--color-border-soft)',
+                      color: activeSection === entry ? 'var(--color-accent)' : 'var(--color-text-subtle)',
+                      backgroundColor: activeSection === entry ? 'color-mix(in oklab, var(--color-accent) 16%, transparent)' : 'transparent',
+                    }}
+                    onClick={() => onSectionChange(entry)}
+                  >
+                    {entry}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {activeSection === 'details' && (
               <div className="grid gap-2">
@@ -124,6 +126,27 @@ export function StoryDrawer({
                   <option value="high">High</option>
                   <option value="urgent">Urgent</option>
                 </select>
+
+                {isCreatingStory && (
+                  <>
+                    <label className="drawer-label">Initial Note</label>
+                    <textarea
+                      rows={3}
+                      className="input-field"
+                      placeholder="Optional kickoff note"
+                      value={newNote}
+                      onChange={(event) => onNewNoteChange(event.target.value)}
+                    />
+
+                    <label className="drawer-label">Dependencies</label>
+                    <input
+                      className="input-field"
+                      placeholder="Optional: story IDs (comma-separated)"
+                      value={newDependencyId}
+                      onChange={(event) => onNewDependencyIdChange(event.target.value)}
+                    />
+                  </>
+                )}
 
                 <label className="drawer-label">Files</label>
                 <div className="max-h-40 overflow-auto pr-1">

@@ -316,7 +316,7 @@ function App() {
 
     if (isCreatingStory) {
       if (!selectedStory.title.trim()) return
-      await fetch(`${API}/stories`, {
+      const createResponse = await fetch(`${API}/stories`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -328,6 +328,35 @@ function App() {
           status: selectedStory.status,
         }),
       })
+
+      const createdJson = await createResponse.json()
+      const createdId = createdJson?.data?.id as string | undefined
+
+      if (createdId) {
+        if (newNote.trim()) {
+          await fetch(`${API}/stories/${createdId}/notes`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ body: newNote.trim(), author: 'you' }),
+          })
+        }
+
+        const depIds = newDependencyId
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+
+        for (const depId of depIds) {
+          await fetch(`${API}/stories/${createdId}/dependencies`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ dependsOnStoryId: depId }),
+          })
+        }
+      }
+
+      setNewNote('')
+      setNewDependencyId('')
       setIsCreatingStory(false)
       setDrawerOpen(false)
       setSelectedStory(null)
@@ -485,6 +514,8 @@ function App() {
         onClose={() => {
           setDrawerOpen(false)
           setIsCreatingStory(false)
+          setNewNote('')
+          setNewDependencyId('')
         }}
         onSectionChange={setDrawerSection}
         onStoryChange={setSelectedStory}
