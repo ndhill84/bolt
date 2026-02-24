@@ -25,6 +25,11 @@
 - `updated_since` filters for incremental refresh.
 - Server-side digest endpoints to prevent large prompt payloads.
 - Stable enums and concise keys in responses.
+- Field projection (`fields`) and controlled expansion (`include`) on major endpoints.
+- Batch mutations for high-churn sprint operations.
+
+### Architectural Rule
+Token efficiency is a first-order requirement, not a nice-to-have. For all new endpoints and UI data flows, optimize for frequent LLM usage first, while preserving full feature coverage.
 
 ## Deployment Targets
 - Local dev via Docker Compose (Postgres + MinIO optional).
