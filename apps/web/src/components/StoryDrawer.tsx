@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { DrawerSection, FileAsset, Note, Priority, Story, StoryDependency } from '../lib/types'
 
 type Props = {
@@ -8,14 +9,18 @@ type Props = {
   dependencies: StoryDependency[]
   files: FileAsset[]
   newNote: string
-  newDependencyId: string
+  newDependencyIds: string[]
+  dependencyOptions: Array<{ id: string; title: string }>
+  assigneeOptions: string[]
+  onAddAssigneeOption: (name: string) => void
   newFilename: string
   onClose: () => void
   onSectionChange: (section: DrawerSection) => void
   onStoryChange: (story: Story) => void
+  isCreatingStory?: boolean
   onSaveStory: () => Promise<void>
   onNewNoteChange: (value: string) => void
-  onNewDependencyIdChange: (value: string) => void
+  onNewDependencyIdsChange: (value: string[]) => void
   onNewFilenameChange: (value: string) => void
   onAddNote: () => Promise<void>
   onAddDependency: () => Promise<void>
@@ -32,20 +37,25 @@ export function StoryDrawer({
   dependencies,
   files,
   newNote,
-  newDependencyId,
+  newDependencyIds,
+  dependencyOptions,
+  assigneeOptions,
+  onAddAssigneeOption,
   newFilename,
   onClose,
   onSectionChange,
   onStoryChange,
+  isCreatingStory,
   onSaveStory,
   onNewNoteChange,
-  onNewDependencyIdChange,
+  onNewDependencyIdsChange,
   onNewFilenameChange,
   onAddNote,
   onAddDependency,
   onAddFile,
 }: Props) {
   const activeSection: DrawerSection = section === 'files' ? 'details' : section
+  const [newAssigneeName, setNewAssigneeName] = useState('')
 
   return (
     <>
@@ -69,23 +79,25 @@ export function StoryDrawer({
           <p className="text-sm text-[var(--color-text-muted)]">Select a story to see details.</p>
         ) : (
           <>
-            <div className="mb-3 flex flex-wrap gap-1">
-              {sections.map((entry) => (
-                <button
-                  key={entry}
-                  type="button"
-                  className="rounded-md border px-2 py-1 text-xs font-semibold uppercase"
-                  style={{
-                    borderColor: activeSection === entry ? 'var(--color-accent)' : 'var(--color-border-soft)',
-                    color: activeSection === entry ? 'var(--color-accent)' : 'var(--color-text-subtle)',
-                    backgroundColor: activeSection === entry ? 'color-mix(in oklab, var(--color-accent) 16%, transparent)' : 'transparent',
-                  }}
-                  onClick={() => onSectionChange(entry)}
-                >
-                  {entry}
-                </button>
-              ))}
-            </div>
+            {!isCreatingStory && (
+              <div className="mb-3 flex flex-wrap gap-1">
+                {sections.map((entry) => (
+                  <button
+                    key={entry}
+                    type="button"
+                    className="rounded-md border px-2 py-1 text-xs font-semibold uppercase"
+                    style={{
+                      borderColor: activeSection === entry ? 'var(--color-accent)' : 'var(--color-border-soft)',
+                      color: activeSection === entry ? 'var(--color-accent)' : 'var(--color-text-subtle)',
+                      backgroundColor: activeSection === entry ? 'color-mix(in oklab, var(--color-accent) 16%, transparent)' : 'transparent',
+                    }}
+                    onClick={() => onSectionChange(entry)}
+                  >
+                    {entry}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {activeSection === 'details' && (
               <div className="grid gap-2">
@@ -105,11 +117,41 @@ export function StoryDrawer({
                 />
 
                 <label className="drawer-label">Assignee</label>
-                <input
-                  className="input-field"
-                  value={story.assignee ?? ''}
-                  onChange={(event) => onStoryChange({ ...story, assignee: event.target.value })}
-                />
+                <div className="grid gap-2">
+                  <select
+                    className="input-field"
+                    value={story.assignee ?? ''}
+                    onChange={(event) => onStoryChange({ ...story, assignee: event.target.value })}
+                  >
+                    <option value="">Unassigned</option>
+                    {assigneeOptions.map((assignee) => (
+                      <option key={assignee} value={assignee}>
+                        {assignee}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
+                    <input
+                      className="input-field"
+                      placeholder="Add assignee"
+                      value={newAssigneeName}
+                      onChange={(event) => setNewAssigneeName(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() => {
+                        const trimmed = newAssigneeName.trim()
+                        if (!trimmed) return
+                        onAddAssigneeOption(trimmed)
+                        onStoryChange({ ...story, assignee: trimmed })
+                        setNewAssigneeName('')
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
 
                 <label className="drawer-label">Priority</label>
                 <select
@@ -122,6 +164,51 @@ export function StoryDrawer({
                   <option value="high">High</option>
                   <option value="urgent">Urgent</option>
                 </select>
+
+                {isCreatingStory && (
+                  <>
+                    <label className="drawer-label">Initial Note</label>
+                    <textarea
+                      rows={3}
+                      className="input-field"
+                      placeholder="Optional kickoff note"
+                      value={newNote}
+                      onChange={(event) => onNewNoteChange(event.target.value)}
+                    />
+
+                    <label className="drawer-label">Dependencies</label>
+                    <div className="grid gap-2">
+                      {newDependencyIds.map((depId, idx) => (
+                        <select
+                          key={`dep-${idx}`}
+                          className="input-field"
+                          value={depId}
+                          onChange={(event) => {
+                            const next = [...newDependencyIds]
+                            next[idx] = event.target.value
+                            onNewDependencyIdsChange(next)
+                          }}
+                        >
+                          <option value="">Select dependency story</option>
+                          {dependencyOptions.map((opt) => (
+                            <option key={opt.id} value={opt.id}>
+                              {opt.title}
+                            </option>
+                          ))}
+                        </select>
+                      ))}
+                      <div>
+                        <button
+                          type="button"
+                          className="ghost-btn"
+                          onClick={() => onNewDependencyIdsChange([...newDependencyIds, ''])}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 <label className="drawer-label">Files</label>
                 <div className="max-h-40 overflow-auto pr-1">
@@ -151,7 +238,7 @@ export function StoryDrawer({
                 </div>
 
                 <button type="button" className="primary-btn" onClick={() => void onSaveStory()}>
-                  Save Story
+                  {isCreatingStory ? 'Create Story' : 'Save Story'}
                 </button>
               </div>
             )}
@@ -204,12 +291,18 @@ export function StoryDrawer({
                     {!dependencies.length && <p className="text-xs text-[var(--color-text-muted)]">No dependencies.</p>}
                   </div>
                 </div>
-                <input
+                <select
                   className="input-field"
-                  placeholder="Depends on story ID"
-                  value={newDependencyId}
-                  onChange={(event) => onNewDependencyIdChange(event.target.value)}
-                />
+                  value={newDependencyIds[0] ?? ''}
+                  onChange={(event) => onNewDependencyIdsChange([event.target.value])}
+                >
+                  <option value="">Select dependency story</option>
+                  {dependencyOptions.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.title}
+                    </option>
+                  ))}
+                </select>
                 <button type="button" className="primary-btn" onClick={() => void onAddDependency()}>
                   Add Dependency
                 </button>

@@ -6,13 +6,14 @@
 
 Bolt is a purpose-built workspace for running software sprints with an AI teammate — planning, execution, context, and visibility in one place.
 
-[![Status](https://img.shields.io/badge/status-active_development-22c55e?style=flat-square)](https://github.com/ndhill84/bolt)
-[![Powered by OpenClaw](https://img.shields.io/badge/powered_by-OpenClaw-0ea5e9?style=flat-square)](https://github.com/openclaw/openclaw)
-[![Collaboration](https://img.shields.io/badge/mode-human_%2B_ai_collaboration-8b5cf6?style=flat-square)](https://github.com/ndhill84/bolt)
-[![Frontend](https://img.shields.io/badge/frontend-React_%2B_Vite-61dafb?style=flat-square)](https://vitejs.dev/)
-[![Backend](https://img.shields.io/badge/backend-Fastify-000000?style=flat-square)](https://fastify.dev/)
-[![Database](https://img.shields.io/badge/database-PostgreSQL-336791?style=flat-square)](https://www.postgresql.org/)
-[![Storage](https://img.shields.io/badge/storage-S3_compatible-f59e0b?style=flat-square)](https://aws.amazon.com/s3/)
+[![Status](https://img.shields.io/badge/status-active_development-22c55e?logo=github)](https://github.com/ndhill84/bolt)
+[![Collaboration](https://img.shields.io/badge/mode-human_%2B_ai_collaboration-8b5cf6?logo=openai)](https://github.com/ndhill84/bolt)
+[![Frontend](https://img.shields.io/badge/frontend-React_%2B_Vite-61dafb?logo=react)](https://vitejs.dev/)
+[![Backend](https://img.shields.io/badge/backend-Fastify-000000?logo=fastify)](https://fastify.dev/)
+[![Language](https://img.shields.io/badge/language-TypeScript-3178c6?logo=typescript)](https://www.typescriptlang.org/)
+[![ORM](https://img.shields.io/badge/orm-Prisma-2d3748?logo=prisma)](https://www.prisma.io/)
+[![Database](https://img.shields.io/badge/database-SQLite-003b57?logo=sqlite)](https://www.sqlite.org/)
+[![Storage](https://img.shields.io/badge/storage-Local_File_System-0f766e?logo=files)](https://en.wikipedia.org/wiki/File_system)
 
 </div>
 
@@ -132,8 +133,8 @@ It’s the same feature depth — just sharper, leaner, and built for human + AI
 
 - **Frontend:** React + TypeScript + Vite
 - **Backend:** Fastify + TypeScript
-- **Data:** PostgreSQL + Prisma
-- **File storage:** S3-compatible object storage (MinIO/S3/R2)
+- **Data:** SQLite + Prisma
+- **File storage:** Local filesystem + metadata in SQLite
 - **Repo:** npm workspaces monorepo
 
 ---
@@ -149,7 +150,7 @@ bolt/
 │  └─ shared/       # Shared contracts/types
 ├─ docs/            # Architecture, API, product, phased plan
 ├─ assets/          # Branding assets (logo, etc.)
-└─ docker-compose.yml
+└─ apps/api/data/   # SQLite DB + local file storage (runtime)
 ```
 
 ---
@@ -159,7 +160,6 @@ bolt/
 ### Prerequisites
 - Node.js 22+
 - npm 10+
-- Docker + Docker Compose
 
 ### Install + run
 
@@ -167,7 +167,6 @@ bolt/
 git clone https://github.com/ndhill84/bolt.git
 cd bolt
 npm install
-docker compose up -d
 ```
 
 Run services:
@@ -180,12 +179,21 @@ npm run dev:api
 npm run dev:web
 ```
 
+Seed baseline and demo data (optional):
+
+```bash
+# Baseline core seed
+npm --workspace @bolt/api run db:seed
+
+# Demo projects/stories seed
+npm --workspace @bolt/api run db:seed:demo
+```
+
 Defaults:
 - API: `http://localhost:4000`
 - Web: `http://localhost:5173`
-- Postgres: `localhost:5432`
-- MinIO API: `localhost:9000`
-- MinIO Console: `localhost:9001`
+- SQLite DB file: `apps/api/data/bolt.db`
+- Local file storage: `apps/api/data/files/`
 
 ---
 

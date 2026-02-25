@@ -8,10 +8,16 @@
     "build": "tsc -p tsconfig.json",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init",
-    "prisma:push": "prisma db push"
+    "prisma:push": "prisma db push",
+    "db:seed": "prisma db seed",
+    "db:seed:demo": "tsx scripts/seed-demo.ts"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.0",
+    "@fastify/multipart": "^9.4.0",
     "@prisma/client": "^6.16.2",
     "fastify": "^5.0.0",
     "prisma": "^6.16.2",

@@ -23,6 +23,7 @@ import type {
 
 const PRESET_STORAGE_KEY = 'bolt.board.preset'
 const DOCK_MODE_STORAGE_KEY = 'bolt.agentDock.mode'
+const ASSIGNEE_OPTIONS_STORAGE_KEY = 'bolt.assignees'
 
 function App() {
   const [stories, setStories] = useState<Story[]>([])
@@ -34,9 +35,9 @@ function App() {
   const [files, setFiles] = useState<FileAsset[]>([])
   const [countsByStoryId, setCountsByStoryId] = useState<Record<string, StoryCountSummary>>({})
 
-  const [newTitle, setNewTitle] = useState('')
+  const [isCreatingStory, setIsCreatingStory] = useState(false)
   const [newNote, setNewNote] = useState('')
-  const [newDependencyId, setNewDependencyId] = useState('')
+  const [newDependencyIds, setNewDependencyIds] = useState<string[]>([''])
   const [newFilename, setNewFilename] = useState('')
 
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -54,8 +55,17 @@ function App() {
 
   const [agentSession, setAgentSession] = useState<AgentSession | null>(null)
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([])
+  const [assigneeOptions, setAssigneeOptions] = useState<string[]>(() => {
+    const saved = localStorage.getItem(ASSIGNEE_OPTIONS_STORAGE_KEY)
+    if (!saved) return ['You', 'Claudio']
+    try {
+      const parsed = JSON.parse(saved) as string[]
+      return parsed.length ? parsed : ['You', 'Claudio']
+    } catch {
+      return ['You', 'Claudio']
+    }
+  })
 
-  const newStoryInputRef = useRef<HTMLInputElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
@@ -67,6 +77,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem(PRESET_STORAGE_KEY, filters.preset)
   }, [filters.preset])
+
+  useEffect(() => {
+    localStorage.setItem(ASSIGNEE_OPTIONS_STORAGE_KEY, JSON.stringify(assigneeOptions))
+  }, [assigneeOptions])
 
   async function loadProjects() {
     const fallbackProjects: Project[] = [
@@ -185,6 +199,7 @@ function App() {
 
   useEffect(() => {
     setSelectedStory(null)
+    setIsCreatingStory(false)
     setDrawerOpen(false)
     loadStories(selectedProjectId).catch(console.error)
     loadAgent(selectedProjectId).catch(console.error)
@@ -211,7 +226,7 @@ function App() {
 
       if (event.key.toLowerCase() === 'n') {
         event.preventDefault()
-        newStoryInputRef.current?.focus()
+        openNewStoryDrawer()
       }
 
       if (event.key.toLowerCase() === 'f') {
@@ -228,6 +243,15 @@ function App() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
+
+  function addAssigneeOption(name: string) {
+    const next = name.trim()
+    if (!next) return
+    setAssigneeOptions((prev) => {
+      if (prev.some((item) => item.toLowerCase() === next.toLowerCase())) return prev
+      return [...prev, next]
+    })
+  }
 
   async function createProject() {
     const name = window.prompt('New project name')?.trim()
@@ -267,23 +291,27 @@ function App() {
     await loadProjects()
   }
 
-  async function createStory() {
-    if (!newTitle.trim()) return
-
-    await fetch(`${API}/stories`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        title: newTitle,
-        status: 'waiting',
-        priority: 'med',
-        projectId: selectedProjectId === 'all' ? 'core' : selectedProjectId,
-      }),
+  function openNewStoryDrawer() {
+    const projectId = selectedProjectId === 'all' ? 'core' : selectedProjectId
+    setSelectedStory({
+      id: 'new-story',
+      projectId,
+      title: '',
+      description: '',
+      status: 'waiting',
+      priority: 'med',
+      blocked: false,
+      assignee: 'You',
+      updatedAt: new Date().toISOString(),
     })
-
-    setNewTitle('')
-    await loadStories(selectedProjectId)
-    await loadAgent(selectedProjectId)
+    setIsCreatingStory(true)
+    setDrawerSection('details')
+    setDrawerOpen(true)
+    setNotes([])
+    setDependencies([])
+    setFiles([])
+    setNewNote('')
+    setNewDependencyIds([''])
   }
 
   async function moveStory(story: Story, status: StoryStatus) {
@@ -311,6 +339,53 @@ function App() {
 
   async function saveStoryEdit() {
     if (!selectedStory) return
+
+    if (isCreatingStory) {
+      if (!selectedStory.title.trim()) return
+      const createResponse = await fetch(`${API}/stories`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          projectId: selectedProjectId === 'all' ? 'core' : selectedProjectId,
+          title: selectedStory.title,
+          description: selectedStory.description,
+          priority: selectedStory.priority,
+          assignee: selectedStory.assignee,
+          status: selectedStory.status,
+        }),
+      })
+
+      const createdJson = await createResponse.json()
+      const createdId = createdJson?.data?.id as string | undefined
+
+      if (createdId) {
+        if (newNote.trim()) {
+          await fetch(`${API}/stories/${createdId}/notes`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ body: newNote.trim(), author: 'you' }),
+          })
+        }
+
+        const depIds = newDependencyIds.map((item) => item.trim()).filter(Boolean)
+
+        for (const depId of depIds) {
+          await fetch(`${API}/stories/${createdId}/dependencies`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ dependsOnStoryId: depId }),
+          })
+        }
+      }
+
+      setNewNote('')
+      setNewDependencyIds([''])
+      setIsCreatingStory(false)
+      setDrawerOpen(false)
+      setSelectedStory(null)
+      await Promise.all([loadStories(selectedProjectId), loadAgent(selectedProjectId)])
+      return
+    }
 
     await fetch(`${API}/stories/${selectedStory.id}`, {
       method: 'PATCH',
@@ -362,15 +437,16 @@ function App() {
   }
 
   async function addDependency() {
-    if (!selectedStory || !newDependencyId.trim()) return
+    const depId = newDependencyIds[0]?.trim()
+    if (!selectedStory || !depId) return
 
     await fetch(`${API}/stories/${selectedStory.id}/dependencies`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ dependsOnStoryId: newDependencyId }),
+      body: JSON.stringify({ dependsOnStoryId: depId }),
     })
 
-    setNewDependencyId('')
+    setNewDependencyIds([''])
     await Promise.all([loadDependencies(selectedStory.id), loadStories(selectedProjectId)])
   }
 
@@ -396,6 +472,7 @@ function App() {
   }
 
   function openDrawer(story: Story, section: DrawerSection) {
+    setIsCreatingStory(false)
     setSelectedStory(story)
     setDrawerSection(section)
     setDrawerOpen(true)
@@ -419,9 +496,7 @@ function App() {
     <main className="theme-dark min-h-screen bg-[var(--color-bg)] text-[var(--color-text)]">
       <div className="mx-auto max-w-[1500px] px-4 pb-44 pt-4">
         <TopBar
-          newTitle={newTitle}
-          onNewTitleChange={setNewTitle}
-          onCreateStory={createStory}
+          onOpenNewStory={openNewStoryDrawer}
           filters={filters}
           onFilterChange={(changes) => setFilters((prev) => ({ ...prev, ...changes, preset: changes.preset ?? prev.preset }))}
           onSelectPreset={(preset) => setFilters((prev) => ({ ...prev, preset }))}
@@ -430,7 +505,6 @@ function App() {
           onProjectChange={setSelectedProjectId}
           onCreateProject={createProject}
           onEditProject={editProject}
-          storyInputRef={newStoryInputRef}
           searchInputRef={searchInputRef}
         />
 
@@ -459,14 +533,25 @@ function App() {
         dependencies={dependencies}
         files={files}
         newNote={newNote}
-        newDependencyId={newDependencyId}
+        newDependencyIds={newDependencyIds}
+        dependencyOptions={stories
+          .filter((story) => (selectedProjectId === 'all' ? true : story.projectId === selectedProjectId) && story.id !== selectedStory?.id)
+          .map((story) => ({ id: story.id, title: story.title }))}
+        assigneeOptions={assigneeOptions}
+        onAddAssigneeOption={addAssigneeOption}
         newFilename={newFilename}
-        onClose={() => setDrawerOpen(false)}
+        onClose={() => {
+          setDrawerOpen(false)
+          setIsCreatingStory(false)
+          setNewNote('')
+          setNewDependencyIds([''])
+        }}
         onSectionChange={setDrawerSection}
         onStoryChange={setSelectedStory}
+        isCreatingStory={isCreatingStory}
         onSaveStory={saveStoryEdit}
         onNewNoteChange={setNewNote}
-        onNewDependencyIdChange={setNewDependencyId}
+        onNewDependencyIdsChange={setNewDependencyIds}
         onNewFilenameChange={setNewFilename}
         onAddNote={addNote}
         onAddDependency={addDependency}

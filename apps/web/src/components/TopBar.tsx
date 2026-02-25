@@ -3,9 +3,7 @@ import type { RefObject } from 'react'
 import type { FilterPresetId, Project, StoryFilters, StoryStatus } from '../lib/types'
 
 type Props = {
-  newTitle: string
-  onNewTitleChange: (value: string) => void
-  onCreateStory: () => Promise<void>
+  onOpenNewStory: () => void
   filters: StoryFilters
   onFilterChange: (changes: Partial<StoryFilters>) => void
   onSelectPreset: (preset: FilterPresetId) => void
@@ -14,7 +12,6 @@ type Props = {
   onProjectChange: (projectId: string) => void
   onCreateProject: () => Promise<void>
   onEditProject: () => Promise<void>
-  storyInputRef: RefObject<HTMLInputElement | null>
   searchInputRef: RefObject<HTMLInputElement | null>
 }
 
@@ -26,9 +23,7 @@ const statusOptions: Array<{ value: 'all' | StoryStatus; label: string }> = [
 ]
 
 export function TopBar({
-  newTitle,
-  onNewTitleChange,
-  onCreateStory,
+  onOpenNewStory,
   filters,
   onFilterChange,
   onSelectPreset,
@@ -37,14 +32,16 @@ export function TopBar({
   onProjectChange,
   onCreateProject,
   onEditProject,
-  storyInputRef,
   searchInputRef,
 }: Props) {
   return (
     <header className="mb-4 rounded-2xl border p-4" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-panel)' }}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-[var(--color-text)]">Bolt Sprint Board</h1>
+          <h1 className="text-xl font-semibold text-[var(--color-text)] flex items-center gap-2">
+            <img src="/bolt-logo.svg" alt="Bolt" className="h-6 w-6" />
+            <span>Bolt Sprint Board</span>
+          </h1>
           <p className="text-xs text-[var(--color-text-muted)]">Compact board with status-safe signaling and quick card actions.</p>
         </div>
         <div className="flex items-center gap-2">
@@ -66,22 +63,8 @@ export function TopBar({
           <button type="button" className="ghost-btn" onClick={() => void onEditProject()} disabled={selectedProjectId === 'all'}>
             Edit Project
           </button>
-          <input
-            ref={storyInputRef}
-            value={newTitle}
-            onChange={(event) => onNewTitleChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                void onCreateStory()
-              }
-            }}
-            placeholder="New story title"
-            className="input-field w-64"
-            aria-label="New story title"
-          />
-          <button type="button" className="primary-btn" onClick={() => void onCreateStory()}>
-            Add Story
+          <button type="button" className="primary-btn" onClick={onOpenNewStory}>
+            New Story
           </button>
         </div>
       </div>
