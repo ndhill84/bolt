@@ -605,8 +605,20 @@ app.get('/api/v1/files', async (req, reply) => {
   if (invalidFields.length) return reply.status(400).send({ error: `invalid fields: ${invalidFields.join(',')}` });
   if (invalidInclude.length) return reply.status(400).send({ error: `invalid include: ${invalidInclude.join(',')}` });
 
-  const effectiveFields = fields ? new Set(fields) : null;
-  includeSet.forEach((field) => effectiveFields?.add(field));
+  const defaultFileFields = [
+    'id',
+    'projectId',
+    'storyId',
+    'filename',
+    'contentType',
+    'byteSize',
+    'filePath',
+    'uploadedBy',
+    'createdAt',
+  ];
+
+  const effectiveFields = fields ? new Set(fields) : new Set(defaultFileFields);
+  includeSet.forEach((field) => effectiveFields.add(field));
 
   const data = files.map((file) => {
     const shaped = shapeRecord(file as unknown as Record<string, unknown>, effectiveFields);
