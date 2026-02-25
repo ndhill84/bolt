@@ -173,6 +173,16 @@ npm run dev:api
 npm run dev:web
 ```
 
+Seed baseline and demo data (optional):
+
+```bash
+# Baseline core seed
+npm --workspace @bolt/api run db:seed
+
+# Demo projects/stories seed
+npm --workspace @bolt/api run db:seed:demo
+```
+
 Defaults:
 - API: `http://localhost:4000`
 - Web: `http://localhost:5173`
