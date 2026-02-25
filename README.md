@@ -18,7 +18,7 @@ Bolt is a purpose-built workspace for running software sprints with an AI teamma
 ---
 
 <div align="center">
-  <img src="assets/bolt.png" alt="Bolt Screenshot"/>
+  <img src="assets/bolt-screenshot.png" alt="Bolt Screenshot"/>
 </div>
 ---
 
