@@ -15,7 +15,11 @@ Bolt is a purpose-built workspace for running software sprints with an AI teamma
 [![Storage](https://img.shields.io/badge/storage-S3_compatible-f59e0b?style=flat-square)](https://aws.amazon.com/s3/)
 
 </div>
+---
 
+<div align="center">
+  <img src="assets/bolt.png" alt="Bolt Screenshot"/>
+</div>
 ---
 
 ## What Bolt is
