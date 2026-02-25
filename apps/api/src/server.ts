@@ -171,6 +171,14 @@ function parseLimit(raw?: string): number {
   return Math.min(parsed, MAX_LIMIT);
 }
 
+function parseLimitStrict(raw?: string): { limit: number; error?: string } {
+  if (!raw) return { limit: DEFAULT_LIMIT };
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed < 1) return { limit: DEFAULT_LIMIT, error: 'limit must be a positive integer' };
+  if (parsed > MAX_LIMIT) return { limit: MAX_LIMIT, error: `limit capped at ${MAX_LIMIT}` };
+  return { limit: parsed };
+}
+
 function parseUpdatedSince(raw?: string): Date | null {
   if (!raw) return null;
   const parsed = new Date(raw);
@@ -328,10 +336,13 @@ app.get('/api/v1/stories', async (req, reply) => {
   }
   if (updatedSince) where.updatedAt = { gte: updatedSince };
 
+  const limitResult = parseLimitStrict(q.limit);
+  if (limitResult.error === 'limit must be a positive integer') return reply.status(400).send({ error: limitResult.error });
+
   const stories = await prisma.story.findMany({
     where,
     orderBy: { updatedAt: 'desc' },
-    take: parseLimit(q.limit),
+    take: limitResult.limit,
   });
   const { fields, invalid } = buildFieldSet(q.fields, STORY_FIELDS_ALLOWLIST);
   if (invalid.length) return reply.status(400).send({ error: `invalid fields: ${invalid.join(',')}` });
@@ -587,10 +598,13 @@ app.get('/api/v1/files', async (req, reply) => {
   }
   if (updatedSince) where.createdAt = { gte: updatedSince };
 
+  const limitResult = parseLimitStrict(q.limit);
+  if (limitResult.error === 'limit must be a positive integer') return reply.status(400).send({ error: limitResult.error });
+
   const files = await prisma.fileAsset.findMany({
     where,
     orderBy: { createdAt: 'desc' },
-    take: parseLimit(q.limit),
+    take: limitResult.limit,
   });
 
   const { fields, invalid: invalidFields } = buildFieldSet(q.fields, FILE_FIELDS_ALLOWLIST);
@@ -790,10 +804,13 @@ app.get('/api/v1/agent/sessions/:id/events', async (req, reply) => {
   }
   if (updatedSince) where.createdAt = { gte: updatedSince };
 
+  const limitResult = parseLimitStrict(q.limit);
+  if (limitResult.error === 'limit must be a positive integer') return reply.status(400).send({ error: limitResult.error });
+
   const events = await prisma.agentEvent.findMany({
     where,
     orderBy: { createdAt: 'desc' },
-    take: parseLimit(q.limit),
+    take: limitResult.limit,
   });
   return { data: events };
 });
