@@ -29,8 +29,10 @@ Ship the minimum API changes needed for a reliable, portable `Bolt-skill` (Agent
 
 - Define initial error codes:
   - `BAD_REQUEST`
+  - `VALIDATION_ERROR`
   - `NOT_FOUND`
   - `CONFLICT`
+  - `IDEMPOTENCY_CONFLICT`
   - `UNSUPPORTED_MEDIA_TYPE`
   - `PAYLOAD_TOO_LARGE`
   - `SERVICE_UNAVAILABLE`
@@ -46,10 +48,11 @@ Ship the minimum API changes needed for a reliable, portable `Bolt-skill` (Agent
 **Why:** Agents may retry requests; writes must not duplicate records.
 
 **Plan**
-- Support `Idempotency-Key` header on mutating routes (`POST`, `PATCH`, `DELETE` where applicable).
+- Support `Idempotency-Key` header on `POST` + `PATCH` routes in V1 (exclude `DELETE` for now).
 - Persist request fingerprint + response (status/body) in a lightweight table.
 - Replays with same key + same fingerprint return original response.
-- Same key + different fingerprint returns conflict error (`CONFLICT`).
+- Same key + different fingerprint returns conflict error (`IDEMPOTENCY_CONFLICT`).
+- Add TTL expiration for keys in V1 (48h default).
 
 **Initial target routes**
 - `POST /projects`
@@ -63,6 +66,7 @@ Ship the minimum API changes needed for a reliable, portable `Bolt-skill` (Agent
 - `POST /files/upload`
 
 **Acceptance**
+- Fingerprint is deterministic (method + route template + normalized params/query/body).
 - Duplicate create attempts with same key do not create duplicate data.
 - Idempotent replay response matches first response.
 
@@ -81,7 +85,9 @@ Add filters to `GET /stories`:
 - `has_dependencies` (`true|false`)
 
 Validation behavior:
-- invalid enum/value/date => `400 BAD_REQUEST` with structured error.
+- invalid enum/value/date => `400` with structured error (`VALIDATION_ERROR`).
+- `assignee` uses substring match in V1 (exact/case-insensitive tuning can move to V2).
+- `due_before` and `due_after` expect ISO timestamps and are evaluated in UTC.
 - preserve existing filters (`projectId`, `status`, `updated_since`, `limit`, `fields`).
 
 **Acceptance**
@@ -114,6 +120,7 @@ Validation behavior:
 - Add `/ready` to verify:
   - DB connectivity
   - Prisma client ready
+  - schema/migration readiness (required tables accessible)
   - required bootstrap state available
 
 **Acceptance**

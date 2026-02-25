@@ -93,6 +93,21 @@ model FileAsset {
   @@index([projectId, storyId, createdAt])
 }
 
+model IdempotencyRecord {
+  id          String   @id @default(uuid())
+  key         String
+  method      String
+  route       String
+  fingerprint String
+  statusCode  Int
+  responseBody String
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  @@unique([key, method, route])
+  @@index([expiresAt])
+}
+
 model AgentSession {
   id              String       @id @default(uuid())
   projectId       String

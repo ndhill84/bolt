@@ -1,9 +1,10 @@
 import Fastify from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
@@ -87,6 +88,34 @@ const FILE_FIELDS_ALLOWLIST = new Set([
   'uploadedBy',
   'createdAt',
 ]);
+const PRIORITY_ALLOWLIST = new Set(['low', 'med', 'high', 'urgent']);
+const IDEMPOTENCY_TTL_MS = 1000 * 60 * 60 * 48;
+
+type ErrorCode =
+  | 'BAD_REQUEST'
+  | 'VALIDATION_ERROR'
+  | 'NOT_FOUND'
+  | 'CONFLICT'
+  | 'IDEMPOTENCY_CONFLICT'
+  | 'UNSUPPORTED_MEDIA_TYPE'
+  | 'PAYLOAD_TOO_LARGE'
+  | 'SERVICE_UNAVAILABLE'
+  | 'INTERNAL_ERROR';
+
+type ErrorEnvelope = {
+  error: {
+    code: ErrorCode;
+    message: string;
+    details?: Record<string, unknown>;
+  };
+};
+
+type IdempotencyMeta = {
+  key: string;
+  method: string;
+  route: string;
+  fingerprint: string;
+};
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = path.join(appDir, 'data');
@@ -281,7 +310,157 @@ function deriveTextAndSummary(contentType: string, filename: string, bytes: Buff
   }
 }
 
+function codeFromStatus(statusCode: number): ErrorCode {
+  if (statusCode === 400) return 'BAD_REQUEST';
+  if (statusCode === 404) return 'NOT_FOUND';
+  if (statusCode === 409) return 'CONFLICT';
+  if (statusCode === 413) return 'PAYLOAD_TOO_LARGE';
+  if (statusCode === 415) return 'UNSUPPORTED_MEDIA_TYPE';
+  if (statusCode === 503) return 'SERVICE_UNAVAILABLE';
+  if (statusCode >= 500) return 'INTERNAL_ERROR';
+  return 'BAD_REQUEST';
+}
+
+function errorPayload(statusCode: number, message: string, code?: ErrorCode, details?: Record<string, unknown>): ErrorEnvelope {
+  return {
+    error: {
+      code: code ?? codeFromStatus(statusCode),
+      message,
+      ...(details ? { details } : {}),
+    },
+  };
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(',')}}`;
+}
+
+function idempotencyFingerprint(req: FastifyRequest, route: string): string {
+  const source = stableStringify({
+    method: req.method,
+    route,
+    params: req.params ?? {},
+    query: req.query ?? {},
+    body: req.body ?? null,
+  });
+  return createHash('sha256').update(source).digest('hex');
+}
+
+app.addHook('preHandler', async (req, reply) => {
+  if (!['POST', 'PATCH'].includes(req.method)) return;
+
+  const keyHeader = req.headers['idempotency-key'];
+  const key = typeof keyHeader === 'string' ? keyHeader.trim() : '';
+  if (!key) return;
+
+  const route = req.routeOptions.url ?? req.url.split('?')[0] ?? '/unknown';
+  const method = req.method;
+  const fingerprint = idempotencyFingerprint(req, route);
+
+  const existing = await prisma.idempotencyRecord.findUnique({
+    where: {
+      key_method_route: {
+        key,
+        method,
+        route,
+      },
+    },
+  });
+
+  if (existing) {
+    if (existing.fingerprint !== fingerprint) {
+      return reply.status(409).send(errorPayload(409, 'idempotency key reused with a different request payload', 'IDEMPOTENCY_CONFLICT'));
+    }
+
+    reply.header('x-idempotent-replay', 'true');
+    return reply.status(existing.statusCode).type('application/json').send(existing.responseBody);
+  }
+
+  (req as FastifyRequest & { idempotencyMeta?: IdempotencyMeta }).idempotencyMeta = {
+    key,
+    method,
+    route,
+    fingerprint,
+  };
+});
+
+app.addHook('onSend', async (req, reply, payload) => {
+  let outgoing: unknown = payload;
+  if (typeof payload === 'string') {
+    try {
+      outgoing = JSON.parse(payload);
+    } catch {
+      outgoing = payload;
+    }
+  }
+
+  if (reply.statusCode >= 400 && typeof outgoing === 'object' && outgoing !== null) {
+    const obj = outgoing as Record<string, unknown>;
+    const nestedError = obj.error as Record<string, unknown> | undefined;
+
+    if (typeof obj.error === 'string') {
+      outgoing = errorPayload(reply.statusCode, obj.error);
+    } else if (nestedError && (typeof nestedError.code !== 'string' || typeof nestedError.message !== 'string')) {
+      const message =
+        typeof nestedError.message === 'string'
+          ? nestedError.message
+          : typeof obj.message === 'string'
+            ? obj.message
+            : 'request failed';
+      outgoing = errorPayload(reply.statusCode, message);
+    } else if (!obj.error && typeof obj.message === 'string') {
+      outgoing = errorPayload(reply.statusCode, obj.message);
+    }
+  }
+
+  const meta = (req as FastifyRequest & { idempotencyMeta?: IdempotencyMeta }).idempotencyMeta;
+  if (meta && reply.statusCode < 500) {
+    const bodyString = typeof outgoing === 'string' ? outgoing : JSON.stringify(outgoing);
+    try {
+      await prisma.idempotencyRecord.create({
+        data: {
+          key: meta.key,
+          method: meta.method,
+          route: meta.route,
+          fingerprint: meta.fingerprint,
+          statusCode: reply.statusCode,
+          responseBody: bodyString,
+          expiresAt: new Date(Date.now() + IDEMPOTENCY_TTL_MS),
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')) {
+        req.log.warn({ err: error }, 'failed to persist idempotency record');
+      }
+    }
+  }
+
+  if (typeof outgoing === 'string') return outgoing;
+  return JSON.stringify(outgoing);
+});
+
+app.setErrorHandler((error: unknown, _req, reply) => {
+  const maybeError = error as { statusCode?: number; message?: string };
+  const statusCode = typeof maybeError.statusCode === 'number' ? maybeError.statusCode : 500;
+  return reply.status(statusCode).send(errorPayload(statusCode, maybeError.message || 'internal error'));
+});
+
 app.get('/health', async () => ({ ok: true }));
+
+app.get('/ready', async (_req, reply) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    await prisma.project.count({ where: { id: 'core' } });
+    return { ok: true };
+  } catch (error) {
+    return reply.status(503).send(errorPayload(503, 'service not ready', 'SERVICE_UNAVAILABLE', {
+      reason: error instanceof Error ? error.message : 'unknown',
+    }));
+  }
+});
 
 app.get('/api/v1/projects', async () => {
   const projects = await prisma.project.findMany({ orderBy: { createdAt: 'asc' } });
@@ -359,17 +538,69 @@ app.get('/api/v1/stories', async (req, reply) => {
     limit?: string;
     updated_since?: string;
     fields?: string;
+    assignee?: string;
+    priority?: 'low' | 'med' | 'high' | 'urgent';
+    blocked?: 'true' | 'false';
+    due_before?: string;
+    due_after?: string;
+    has_dependencies?: 'true' | 'false';
   };
   const where: Prisma.StoryWhereInput = {};
 
   const normalizedProjectId = normalizeProjectId(q.projectId);
   if (normalizedProjectId) where.projectId = normalizedProjectId;
   if (q.status) where.status = q.status;
+  if (q.assignee?.trim()) {
+    where.assignee = { contains: q.assignee.trim() };
+  }
+  if (q.priority) {
+    if (!PRIORITY_ALLOWLIST.has(q.priority)) {
+      return reply.status(400).send(errorPayload(400, 'priority must be one of low, med, high, urgent', 'VALIDATION_ERROR'));
+    }
+    where.priority = q.priority;
+  }
+  if (q.blocked !== undefined) {
+    if (q.blocked !== 'true' && q.blocked !== 'false') {
+      return reply.status(400).send(errorPayload(400, 'blocked must be true or false', 'VALIDATION_ERROR'));
+    }
+    where.blocked = q.blocked === 'true';
+  }
+
   const updatedSince = parseUpdatedSince(q.updated_since);
   if (updatedSince && Number.isNaN(updatedSince.getTime())) {
     return invalidUpdatedSinceReply(reply);
   }
   if (updatedSince) where.updatedAt = { gte: updatedSince };
+
+  let dueAfter: Date | null = null;
+  if (q.due_after) {
+    dueAfter = new Date(q.due_after);
+    if (Number.isNaN(dueAfter.getTime())) {
+      return reply.status(400).send(errorPayload(400, 'due_after must be a valid ISO timestamp', 'VALIDATION_ERROR'));
+    }
+  }
+
+  let dueBefore: Date | null = null;
+  if (q.due_before) {
+    dueBefore = new Date(q.due_before);
+    if (Number.isNaN(dueBefore.getTime())) {
+      return reply.status(400).send(errorPayload(400, 'due_before must be a valid ISO timestamp', 'VALIDATION_ERROR'));
+    }
+  }
+
+  if (dueAfter || dueBefore) {
+    where.dueAt = {
+      ...(dueAfter ? { gte: dueAfter } : {}),
+      ...(dueBefore ? { lte: dueBefore } : {}),
+    };
+  }
+
+  if (q.has_dependencies !== undefined) {
+    if (q.has_dependencies !== 'true' && q.has_dependencies !== 'false') {
+      return reply.status(400).send(errorPayload(400, 'has_dependencies must be true or false', 'VALIDATION_ERROR'));
+    }
+    where.dependencies = q.has_dependencies === 'true' ? { some: {} } : { none: {} };
+  }
 
   const limitResult = parseLimitStrict(q.limit);
   if (limitResult.error) return invalidLimitReply(reply, limitResult.error);
