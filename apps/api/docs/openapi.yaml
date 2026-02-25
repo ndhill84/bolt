@@ -1,0 +1,2197 @@
+openapi: 3.0.3
+
+info:
+  title: Bolt API
+  version: 0.1.0
+  description: |
+    REST API for Bolt — an AI-assisted project and sprint management system.
+
+    ## Authentication
+    Authentication is optional. If the server is started with `BOLT_API_TOKEN` set,
+    every request must include the token via the `x-bolt-token` header.
+
+    ## Rate Limiting
+    Write methods (POST, PATCH, DELETE) are rate-limited to **120 requests per minute**
+    per IP. Exceeding the limit returns `429 Too Many Requests`.
+
+    ## Idempotency
+    POST and PATCH requests accept an optional `Idempotency-Key` header. Replaying a
+    request with the same key and identical payload returns the cached response with an
+    `x-idempotent-replay: true` header. Replaying with the same key but a different
+    payload returns `409 IDEMPOTENCY_CONFLICT`. Keys expire after 48 hours.
+
+    ## Cursor Pagination
+    List endpoints that support cursor pagination return a `page` object alongside `data`:
+    ```json
+    { "data": [...], "page": { "nextCursor": "<opaque>", "hasMore": true } }
+    ```
+    Pass `cursor=<nextCursor>` in the next request to advance the page.
+    Default page size is 50; maximum is 200.
+
+    ## Error Envelope
+    All error responses use a consistent envelope:
+    ```json
+    { "error": { "code": "NOT_FOUND", "message": "story not found" } }
+    ```
+
+servers:
+  - url: http://localhost:4000
+    description: Local development
+
+security:
+  - BoltToken: []
+
+tags:
+  - name: Health
+    description: Liveness and readiness probes
+  - name: Projects
+    description: Project CRUD
+  - name: Sprints
+    description: Sprint lifecycle and story assignment
+  - name: Stories
+    description: Story CRUD, status moves, and batch operations
+  - name: Notes
+    description: Story notes
+  - name: Labels
+    description: Story labels
+  - name: Dependencies
+    description: Story dependency graph
+  - name: Files
+    description: File assets — JSON registration and multipart upload
+  - name: Agent
+    description: Agent sessions and event stream
+  - name: Audit
+    description: Immutable changefeed of all mutations
+  - name: Digests
+    description: Aggregated project and sprint summaries
+
+# ---------------------------------------------------------------------------
+# Reusable components
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+    BoltToken:
+      type: apiKey
+      in: header
+      name: x-bolt-token
+      description: Static API token. Required only when the server is started with `BOLT_API_TOKEN` set.
+
+  parameters:
+    pathId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    queryLimit:
+      name: limit
+      in: query
+      description: Maximum records to return (1–200, default 50).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+
+    queryCursor:
+      name: cursor
+      in: query
+      description: Opaque pagination cursor returned by the previous response.
+      schema:
+        type: string
+
+    queryUpdatedSince:
+      name: updated_since
+      in: query
+      description: Return only records updated at or after this ISO 8601 timestamp.
+      schema:
+        type: string
+        format: date-time
+
+    queryProjectId:
+      name: projectId
+      in: query
+      description: Filter by project ID. Pass `all` (or omit) to include all projects.
+      schema:
+        type: string
+
+  schemas:
+    # ---- Primitives --------------------------------------------------------
+    StoryStatus:
+      type: string
+      enum: [waiting, in_progress, completed]
+
+    Priority:
+      type: string
+      enum: [low, med, high, urgent]
+
+    SprintStatus:
+      type: string
+      enum: [planned, active, closed]
+
+    PageInfo:
+      type: object
+      properties:
+        nextCursor:
+          type: string
+          nullable: true
+        hasMore:
+          type: boolean
+      required: [nextCursor, hasMore]
+
+    DeletedResult:
+      type: object
+      properties:
+        id:
+          type: string
+        deleted:
+          type: boolean
+      required: [id, deleted]
+
+    # ---- Error envelope ----------------------------------------------------
+    ErrorCode:
+      type: string
+      enum:
+        - BAD_REQUEST
+        - UNAUTHORIZED
+        - RATE_LIMITED
+        - VALIDATION_ERROR
+        - NOT_FOUND
+        - CONFLICT
+        - IDEMPOTENCY_CONFLICT
+        - UNSUPPORTED_MEDIA_TYPE
+        - PAYLOAD_TOO_LARGE
+        - SERVICE_UNAVAILABLE
+        - INTERNAL_ERROR
+
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+
+    # ---- Domain models -----------------------------------------------------
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, name, createdAt, updatedAt]
+
+    Sprint:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+        name:
+          type: string
+        goal:
+          type: string
+          nullable: true
+        status:
+          $ref: '#/components/schemas/SprintStatus'
+        startAt:
+          type: string
+          format: date-time
+          nullable: true
+        endAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, projectId, name, status, createdAt, updatedAt]
+
+    Story:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+        sprintId:
+          type: string
+          nullable: true
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        acceptanceCriteria:
+          type: string
+          nullable: true
+        status:
+          $ref: '#/components/schemas/StoryStatus'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        blocked:
+          type: boolean
+        points:
+          type: integer
+          nullable: true
+        assignee:
+          type: string
+          nullable: true
+        dueAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, projectId, title, status, priority, blocked, createdAt, updatedAt]
+
+    StoryNote:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        storyId:
+          type: string
+        author:
+          type: string
+        body:
+          type: string
+        kind:
+          type: string
+          default: note
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, storyId, author, body, kind, createdAt]
+
+    StoryLabel:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        storyId:
+          type: string
+        label:
+          type: string
+      required: [id, storyId, label]
+
+    StoryDependency:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        storyId:
+          type: string
+        dependsOnStoryId:
+          type: string
+        type:
+          type: string
+          default: blocks
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, storyId, dependsOnStoryId, type, createdAt]
+
+    FileAsset:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+        storyId:
+          type: string
+          nullable: true
+        filename:
+          type: string
+        contentType:
+          type: string
+        byteSize:
+          type: integer
+        filePath:
+          type: string
+        extracted:
+          type: boolean
+          description: True when text content was successfully extracted from the file.
+        uploadedBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, projectId, filename, contentType, byteSize, filePath, extracted, uploadedBy, createdAt]
+
+    FileContent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        extracted:
+          type: boolean
+        summary:
+          type: string
+          nullable: true
+          description: First 400 characters of extracted text.
+        textContent:
+          type: string
+          nullable: true
+          description: Extracted text content (up to 20,000 chars).
+      required: [id, extracted]
+
+    AgentSession:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+        title:
+          type: string
+        state:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        lastHeartbeatAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, projectId, title, state, startedAt, lastHeartbeatAt, createdAt]
+
+    AgentEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+        type:
+          type: string
+        message:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, sessionId, type, message, createdAt]
+
+    AuditEvent:
+      type: object
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+          example: story.moved
+        entityType:
+          type: string
+          example: story
+        entityId:
+          type: string
+        projectId:
+          type: string
+          nullable: true
+        source:
+          type: string
+          example: api
+        actor:
+          type: string
+          nullable: true
+        at:
+          type: string
+          format: date-time
+        diff:
+          description: JSON payload recorded at event time (shape varies by event type).
+          nullable: true
+      required: [eventId, eventType, entityType, entityId, source, at]
+
+    BatchItemResult:
+      type: object
+      properties:
+        id:
+          type: string
+        ok:
+          type: boolean
+        error:
+          type: string
+      required: [id, ok]
+
+  # ---- Common responses ----------------------------------------------------
+  responses:
+    400:
+      description: Bad request / validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    401:
+      description: Unauthorized — missing or invalid `x-bolt-token`
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    404:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    409:
+      description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    413:
+      description: Payload too large
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    415:
+      description: Unsupported media type
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    429:
+      description: Write rate limit exceeded (120 req/min per IP)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    503:
+      description: Service unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  # ==========================================================================
+  # Health / Readiness
+  # ==========================================================================
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Liveness probe
+      security: []
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+
+  /ready:
+    get:
+      tags: [Health]
+      operationId: getReady
+      summary: Readiness probe
+      description: Checks database connectivity and verifies core tables are present.
+      security: []
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+        '503':
+          $ref: '#/components/responses/503'
+
+  # ==========================================================================
+  # Projects
+  # ==========================================================================
+  /api/v1/projects:
+    get:
+      tags: [Projects]
+      operationId: listProjects
+      summary: List all projects
+      responses:
+        '200':
+          description: Project list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Project'
+        '401':
+          $ref: '#/components/responses/401'
+
+    post:
+      tags: [Projects]
+      operationId: createProject
+      summary: Create a project
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+          description: Optional idempotency key (48-hour TTL).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '429':
+          $ref: '#/components/responses/429'
+
+  /api/v1/projects/{id}:
+    patch:
+      tags: [Projects]
+      operationId: updateProject
+      summary: Update a project
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                  nullable: true
+      responses:
+        '200':
+          description: Project updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '429':
+          $ref: '#/components/responses/429'
+
+    delete:
+      tags: [Projects]
+      operationId: deleteProject
+      summary: Delete a project
+      description: |
+        Deletes an empty project. Pass `force=true` to cascade-delete all stories,
+        files, and agent sessions belonging to the project.
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: force
+          in: query
+          description: Set to `true` to delete even when the project has associated records.
+          schema:
+            type: string
+            enum: ['true', 'false']
+      responses:
+        '200':
+          description: Project deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/DeletedResult'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '409':
+          description: Project is not empty; pass `force=true` to override.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/429'
+
+  # ==========================================================================
+  # Sprints
+  # ==========================================================================
+  /api/v1/projects/{id}/sprints:
+    get:
+      tags: [Sprints]
+      operationId: listSprints
+      summary: List sprints for a project
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+      responses:
+        '200':
+          description: Sprint list (newest first)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Sprint'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+
+    post:
+      tags: [Sprints]
+      operationId: createSprint
+      summary: Create a sprint
+      description: |
+        Only one sprint per project may be `active` at a time. Creating a sprint with
+        `status: active` when another is already active returns `409`.
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                goal:
+                  type: string
+                status:
+                  $ref: '#/components/schemas/SprintStatus'
+                startAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                endAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        '201':
+          description: Sprint created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Sprint'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '409':
+          $ref: '#/components/responses/409'
+        '429':
+          $ref: '#/components/responses/429'
+
+  /api/v1/sprints/{id}:
+    patch:
+      tags: [Sprints]
+      operationId: updateSprint
+      summary: Update a sprint
+      description: |
+        Closed sprints cannot be re-opened. Transitioning to `active` when another
+        sprint is already active returns `409`.
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                goal:
+                  type: string
+                status:
+                  $ref: '#/components/schemas/SprintStatus'
+                startAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                endAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        '200':
+          description: Sprint updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Sprint'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '409':
+          $ref: '#/components/responses/409'
+        '429':
+          $ref: '#/components/responses/429'
+
+  /api/v1/sprints/{id}/start:
+    post:
+      tags: [Sprints]
+      operationId: startSprint
+      summary: Start a sprint
+      description: |
+        Transitions the sprint to `active`. Sets `startAt` to now if not already set.
+        Returns `409` if the sprint is already closed or if another sprint in the same
+        project is already active.
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+      responses:
+        '200':
+          description: Sprint started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Sprint'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '409':
+          $ref: '#/components/responses/409'
+        '429':
+          $ref: '#/components/responses/429'
+
+  /api/v1/sprints/{id}/close:
+    post:
+      tags: [Sprints]
+      operationId: closeSprint
+      summary: Close a sprint
+      description: |
+        Transitions the sprint to `closed` (immutable). Sets `endAt` to now if not
+        already set. Closed sprints cannot have stories added to them.
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+      responses:
+        '200':
+          description: Sprint closed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Sprint'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '429':
+          $ref: '#/components/responses/429'
+
+  /api/v1/sprints/{id}/stories:assign:
+    post:
+      tags: [Sprints]
+      operationId: assignStoriesToSprint
+      summary: Batch-assign stories to a sprint
+      description: |
+        Assigns multiple stories to the sprint in one call. All stories must belong to
+        the same project as the sprint. Closed sprints reject assignment.
+        Supports `dry_run` to validate without applying changes. Max 100 story IDs.
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [storyIds]
+              properties:
+                storyIds:
+                  type: array
+                  items:
+                    type: string
+                  maxItems: 100
+                dry_run:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Stories assigned (or dry-run result)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - type: object
+                        description: Dry-run result
+                        properties:
+                          dry_run:
+                            type: boolean
+                            example: true
+                          sprintId:
+                            type: string
+                          assignCount:
+                            type: integer
+                      - type: object
+                        description: Apply result
+                        properties:
+                          sprintId:
+                            type: string
+                          assigned:
+                            type: integer
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '409':
+          $ref: '#/components/responses/409'
+        '429':
+          $ref: '#/components/responses/429'
+
+  # ==========================================================================
+  # Stories
+  # ==========================================================================
+  /api/v1/stories:
+    get:
+      tags: [Stories]
+      operationId: listStories
+      summary: List stories
+      description: |
+        Supports cursor pagination (`cursor` + `limit`), field projection (`fields`),
+        and a rich set of filters. Results are ordered by `updatedAt desc, id desc`.
+      parameters:
+        - $ref: '#/components/parameters/queryLimit'
+        - $ref: '#/components/parameters/queryCursor'
+        - $ref: '#/components/parameters/queryUpdatedSince'
+        - $ref: '#/components/parameters/queryProjectId'
+        - name: sprintId
+          in: query
+          description: Filter by sprint ID.
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/StoryStatus'
+        - name: priority
+          in: query
+          schema:
+            $ref: '#/components/schemas/Priority'
+        - name: assignee
+          in: query
+          description: Case-insensitive substring match on assignee name.
+          schema:
+            type: string
+        - name: blocked
+          in: query
+          description: Filter to blocked (`true`) or unblocked (`false`) stories.
+          schema:
+            type: string
+            enum: ['true', 'false']
+        - name: due_before
+          in: query
+          description: Return stories with `dueAt` at or before this ISO timestamp.
+          schema:
+            type: string
+            format: date-time
+        - name: due_after
+          in: query
+          description: Return stories with `dueAt` at or after this ISO timestamp.
+          schema:
+            type: string
+            format: date-time
+        - name: has_dependencies
+          in: query
+          description: Filter to stories that have (`true`) or lack (`false`) at least one dependency.
+          schema:
+            type: string
+            enum: ['true', 'false']
+        - name: fields
+          in: query
+          description: |
+            Comma-separated list of fields to include in each story object.
+            Allowed: `id`, `projectId`, `title`, `description`, `acceptanceCriteria`,
+            `status`, `priority`, `blocked`, `points`, `assignee`, `dueAt`,
+            `createdAt`, `updatedAt`.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated story list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Story'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+
+    post:
+      tags: [Stories]
+      operationId: createStory
+      summary: Create a story
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                projectId:
+                  type: string
+                  description: Defaults to `core` if omitted.
+                sprintId:
+                  type: string
+                  nullable: true
+                  description: Sprint must belong to the same project and not be closed.
+                description:
+                  type: string
+                acceptanceCriteria:
+                  type: string
+                status:
+                  $ref: '#/components/schemas/StoryStatus'
+                priority:
+                  $ref: '#/components/schemas/Priority'
+                blocked:
+                  type: boolean
+                points:
+                  type: integer
+                assignee:
+                  type: string
+                dueAt:
+                  type: string
+                  format: date-time
+      responses:
+        '201':
+          description: Story created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Story'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '409':
+          $ref: '#/components/responses/409'
+        '429':
+          $ref: '#/components/responses/429'
+
+  /api/v1/stories/batch/move:
+    post:
+      tags: [Stories]
+      operationId: batchMoveStories
+      summary: Batch move stories to a new status
+      description: |
+        Moves up to 100 stories to their specified statuses in one request.
+
+        - `dry_run: true` — validates all items without applying changes.
+        - `all_or_nothing: true` — wraps mutations in a transaction; any failure
+          rolls back all changes and returns `409` with per-item results.
+        - Default (partial) mode — continues on per-item errors and returns
+          each item's `ok`/`error` outcome.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [id, status]
+                    properties:
+                      id:
+                        type: string
+                      status:
+                        $ref: '#/components/schemas/StoryStatus'
+                dry_run:
+                  type: boolean
+                  default: false
+                all_or_nothing:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Batch move result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      dry_run:
+                        type: boolean
+                      results:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/BatchItemResult'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '409':
+          description: All-or-nothing failure; no changes were applied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/429'
+
+  /api/v1/stories/batch/patch:
+    post:
+      tags: [Stories]
+      operationId: batchPatchStories
+      summary: Batch patch story fields
+      description: |
+        Updates patchable fields (`priority`, `assignee`, `blocked`, `sprintId`,
+        `dueAt`) for up to 100 stories in one call.
+
+        Supports the same `dry_run` and `all_or_nothing` semantics as batch/move.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [id, patch]
+                    properties:
+                      id:
+                        type: string
+                      patch:
+                        type: object
+                        properties:
+                          priority:
+                            $ref: '#/components/schemas/Priority'
+                          assignee:
+                            type: string
+                            nullable: true
+                          blocked:
+                            type: boolean
+                          sprintId:
+                            type: string
+                            nullable: true
+                          dueAt:
+                            type: string
+                            format: date-time
+                            nullable: true
+                dry_run:
+                  type: boolean
+                  default: false
+                all_or_nothing:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Batch patch result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      dry_run:
+                        type: boolean
+                      results:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/BatchItemResult'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '409':
+          description: All-or-nothing failure; no changes were applied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/429'
+
+  /api/v1/stories/{id}:
+    patch:
+      tags: [Stories]
+      operationId: updateStory
+      summary: Update a story
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                sprintId:
+                  type: string
+                  nullable: true
+                  description: Pass `null` to unassign from the current sprint.
+                description:
+                  type: string
+                  nullable: true
+                acceptanceCriteria:
+                  type: string
+                  nullable: true
+                status:
+                  $ref: '#/components/schemas/StoryStatus'
+                priority:
+                  $ref: '#/components/schemas/Priority'
+                blocked:
+                  type: boolean
+                points:
+                  type: integer
+                  nullable: true
+                assignee:
+                  type: string
+                  nullable: true
+                dueAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        '200':
+          description: Story updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Story'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '409':
+          $ref: '#/components/responses/409'
+        '429':
+          $ref: '#/components/responses/429'
+
+    delete:
+      tags: [Stories]
+      operationId: deleteStory
+      summary: Delete a story
+      description: |
+        Cascades to file assets attached to the story. Dependent stories that were
+        blocked by this story have their `blocked` state recomputed automatically.
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+      responses:
+        '200':
+          description: Story deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/DeletedResult'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '429':
+          $ref: '#/components/responses/429'
+
+  /api/v1/stories/{id}/move:
+    post:
+      tags: [Stories]
+      operationId: moveStory
+      summary: Move a story to a new status
+      description: |
+        Convenience endpoint for a single status transition. Also recomputes the
+        `blocked` state of any stories that depend on this one.
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  $ref: '#/components/schemas/StoryStatus'
+      responses:
+        '200':
+          description: Story moved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Story'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '429':
+          $ref: '#/components/responses/429'
+
+  # ==========================================================================
+  # Notes
+  # ==========================================================================
+  /api/v1/stories/{id}/notes:
+    get:
+      tags: [Notes]
+      operationId: listNotes
+      summary: List notes for a story
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+      responses:
+        '200':
+          description: Notes (newest first)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/StoryNote'
+        '401':
+          $ref: '#/components/responses/401'
+
+    post:
+      tags: [Notes]
+      operationId: createNote
+      summary: Add a note to a story
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body:
+                  type: string
+                author:
+                  type: string
+                  default: you
+                kind:
+                  type: string
+                  default: note
+                  description: Arbitrary note kind tag (e.g. `note`, `decision`, `blocker`).
+      responses:
+        '201':
+          description: Note created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StoryNote'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '429':
+          $ref: '#/components/responses/429'
+
+  # ==========================================================================
+  # Labels
+  # ==========================================================================
+  /api/v1/stories/{id}/labels:
+    get:
+      tags: [Labels]
+      operationId: listLabels
+      summary: List labels for a story
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+      responses:
+        '200':
+          description: Labels (alphabetical)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/StoryLabel'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+
+    post:
+      tags: [Labels]
+      operationId: addLabel
+      summary: Add a label to a story
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label:
+                  type: string
+      responses:
+        '201':
+          description: Label added
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StoryLabel'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '409':
+          description: Label already exists on this story.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/429'
+
+  /api/v1/stories/{id}/labels/{label}:
+    delete:
+      tags: [Labels]
+      operationId: removeLabel
+      summary: Remove a label from a story
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: label
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Label removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      storyId:
+                        type: string
+                      label:
+                        type: string
+                      deleted:
+                        type: boolean
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '429':
+          $ref: '#/components/responses/429'
+
+  # ==========================================================================
+  # Dependencies
+  # ==========================================================================
+  /api/v1/stories/{id}/dependencies:
+    get:
+      tags: [Dependencies]
+      operationId: listDependencies
+      summary: List outgoing dependencies for a story
+      description: Returns the stories that this story depends on (i.e. is blocked by).
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+      responses:
+        '200':
+          description: Dependency list (newest first)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/StoryDependency'
+        '401':
+          $ref: '#/components/responses/401'
+
+    post:
+      tags: [Dependencies]
+      operationId: createDependency
+      summary: Add a dependency to a story
+      description: |
+        Creates a `story → dependsOn` edge. The server validates:
+        - Both stories must be in the same project.
+        - A story cannot depend on itself.
+        - The new edge must not create a cycle in the dependency graph.
+
+        The `blocked` field of the story is recomputed after creation.
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dependsOnStoryId]
+              properties:
+                dependsOnStoryId:
+                  type: string
+                type:
+                  type: string
+                  default: blocks
+      responses:
+        '201':
+          description: Dependency created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StoryDependency'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '409':
+          description: Dependency already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/429'
+
+  /api/v1/dependencies/{id}:
+    delete:
+      tags: [Dependencies]
+      operationId: deleteDependency
+      summary: Delete a dependency
+      description: The `blocked` state of the dependent story is recomputed after deletion.
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+      responses:
+        '200':
+          description: Dependency deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/DeletedResult'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '429':
+          $ref: '#/components/responses/429'
+
+  # ==========================================================================
+  # Files
+  # ==========================================================================
+  /api/v1/files:
+    get:
+      tags: [Files]
+      operationId: listFiles
+      summary: List file assets
+      description: |
+        Supports cursor pagination and field projection. By default `textContent`
+        and `summary` are excluded; opt in via the `include` parameter.
+        The `extracted` field indicates whether text was successfully extracted.
+      parameters:
+        - $ref: '#/components/parameters/queryLimit'
+        - $ref: '#/components/parameters/queryCursor'
+        - $ref: '#/components/parameters/queryUpdatedSince'
+        - $ref: '#/components/parameters/queryProjectId'
+        - name: storyId
+          in: query
+          schema:
+            type: string
+        - name: fields
+          in: query
+          description: |
+            Comma-separated projection. Allowed: `id`, `projectId`, `storyId`,
+            `filename`, `contentType`, `byteSize`, `filePath`, `textContent`,
+            `summary`, `extracted`, `uploadedBy`, `createdAt`.
+          schema:
+            type: string
+        - name: include
+          in: query
+          description: |
+            Extra fields to include on top of defaults. Allowed: `summary`, `textContent`.
+            `textContent` is truncated to 2,000 chars; `summary` to 400.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated file list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FileAsset'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+
+    post:
+      tags: [Files]
+      operationId: registerFile
+      summary: Register a file asset (JSON)
+      description: |
+        Creates a file asset record without uploading binary data. Useful when the
+        file is already stored externally or when providing pre-extracted text.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename]
+              properties:
+                filename:
+                  type: string
+                projectId:
+                  type: string
+                  description: Defaults to `core` if omitted.
+                storyId:
+                  type: string
+                contentType:
+                  type: string
+                  default: application/octet-stream
+                byteSize:
+                  type: integer
+                  default: 0
+                filePath:
+                  type: string
+                textContent:
+                  type: string
+                summary:
+                  type: string
+                uploadedBy:
+                  type: string
+                  default: you
+      responses:
+        '201':
+          description: File registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/FileAsset'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '429':
+          $ref: '#/components/responses/429'
+
+  /api/v1/files/upload:
+    post:
+      tags: [Files]
+      operationId: uploadFile
+      summary: Upload a file (multipart)
+      description: |
+        Accepts `multipart/form-data`. Text is extracted automatically for supported
+        types (plain text, markdown, JSON, CSV, XML, YAML). Max file size: **5 MB**.
+
+        Supported content types: `text/plain`, `text/markdown`, `application/json`,
+        `text/csv`, `application/xml`, `text/xml`, `application/octet-stream`,
+        and any `text/*` type.
+
+        Returns `503` if `@fastify/multipart` is not installed.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, projectId, uploadedBy]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                projectId:
+                  type: string
+                storyId:
+                  type: string
+                uploadedBy:
+                  type: string
+      responses:
+        '201':
+          description: File uploaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/FileAsset'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '413':
+          $ref: '#/components/responses/413'
+        '415':
+          $ref: '#/components/responses/415'
+        '429':
+          $ref: '#/components/responses/429'
+        '503':
+          $ref: '#/components/responses/503'
+
+  /api/v1/files/{id}:
+    delete:
+      tags: [Files]
+      operationId: deleteFile
+      summary: Delete a file asset
+      description: Removes the database record and the underlying file from disk (best-effort).
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+      responses:
+        '200':
+          description: File deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/DeletedResult'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '429':
+          $ref: '#/components/responses/429'
+
+  /api/v1/files/{id}/content:
+    get:
+      tags: [Files]
+      operationId: getFileContent
+      summary: Get extracted text content for a file
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+      responses:
+        '200':
+          description: File content
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/FileContent'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+
+  # ==========================================================================
+  # Agent
+  # ==========================================================================
+  /api/v1/agent/sessions:
+    get:
+      tags: [Agent]
+      operationId: listAgentSessions
+      summary: List agent sessions
+      parameters:
+        - $ref: '#/components/parameters/queryProjectId'
+      responses:
+        '200':
+          description: Session list (oldest first)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AgentSession'
+        '401':
+          $ref: '#/components/responses/401'
+
+  /api/v1/agent/sessions/{id}/events:
+    get:
+      tags: [Agent]
+      operationId: listAgentEvents
+      summary: List events for an agent session
+      description: Supports cursor pagination and `updated_since`. Results are newest-first.
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - $ref: '#/components/parameters/queryLimit'
+        - $ref: '#/components/parameters/queryCursor'
+        - $ref: '#/components/parameters/queryUpdatedSince'
+      responses:
+        '200':
+          description: Paginated event list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AgentEvent'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+
+    post:
+      tags: [Agent]
+      operationId: createAgentEvent
+      summary: Append an event to an agent session
+      description: Also bumps `lastHeartbeatAt` on the session.
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                type:
+                  type: string
+                  default: action
+                  description: Arbitrary event type tag (e.g. `status`, `action`, `artifact`).
+      responses:
+        '201':
+          description: Event created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AgentEvent'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '429':
+          $ref: '#/components/responses/429'
+
+  # ==========================================================================
+  # Audit
+  # ==========================================================================
+  /api/v1/audit:
+    get:
+      tags: [Audit]
+      operationId: listAuditEvents
+      summary: Query the audit changefeed
+      description: |
+        Returns a monotonically ordered (newest-first) stream of all mutations.
+        Use `since` for incremental sync ("what changed since timestamp X?").
+        Supports cursor pagination for large windows.
+
+        Canonical event types include: `project.created`, `project.updated`,
+        `project.deleted`, `story.created`, `story.updated`, `story.moved`,
+        `story.deleted`, `sprint.created`, `sprint.updated`, `sprint.started`,
+        `sprint.closed`, `sprint.stories_assigned`, `note.created`,
+        `dependency.created`, `dependency.deleted`, `file.created`,
+        `file.uploaded`, `file.deleted`, `agent.event.created`.
+      parameters:
+        - name: since
+          in: query
+          description: Return events created at or after this ISO timestamp.
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/queryProjectId'
+        - $ref: '#/components/parameters/queryLimit'
+        - $ref: '#/components/parameters/queryCursor'
+      responses:
+        '200':
+          description: Paginated audit events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditEvent'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+
+  # ==========================================================================
+  # Digests
+  # ==========================================================================
+  /api/v1/digests/sprint/{id}:
+    get:
+      tags: [Digests]
+      operationId: getSprintDigest
+      summary: Sprint digest
+      description: Returns story counts, blocked list, and per-assignee breakdown for a sprint.
+      parameters:
+        - $ref: '#/components/parameters/pathId'
+      responses:
+        '200':
+          description: Sprint digest
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      sprint:
+                        $ref: '#/components/schemas/Sprint'
+                      counts:
+                        type: object
+                        properties:
+                          waiting:
+                            type: integer
+                          in_progress:
+                            type: integer
+                          completed:
+                            type: integer
+                          total:
+                            type: integer
+                      blocked:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            title:
+                              type: string
+                      byAssignee:
+                        type: object
+                        additionalProperties:
+                          type: integer
+                        description: Map of assignee name → story count.
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+
+  /api/v1/digests/project/{projectId}/daily:
+    get:
+      tags: [Digests]
+      operationId: getDailyProjectDigest
+      summary: Daily project digest
+      description: |
+        Aggregated snapshot for a project covering the last 24 hours.
+        Pass `projectId=all` to aggregate across all projects.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          description: Project ID or `all`.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Daily digest
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      counts:
+                        type: object
+                        properties:
+                          waiting:
+                            type: integer
+                          in_progress:
+                            type: integer
+                          completed:
+                            type: integer
+                      blocked:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            title:
+                              type: string
+                      byAssignee:
+                        type: object
+                        additionalProperties:
+                          type: integer
+                        description: Map of assignee name → story count.
+                      byPriority:
+                        type: object
+                        additionalProperties:
+                          type: integer
+                        description: Map of priority → story count.
+                      newBlocked:
+                        type: integer
+                        description: Stories that became blocked in the last 24 h.
+                      resolvedBlocked:
+                        type: integer
+                        description: Stories that became unblocked in the last 24 h.
+                      recentMoves:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            eventId:
+                              type: string
+                            entityId:
+                              type: string
+                            at:
+                              type: string
+                              format: date-time
+                            diff:
+                              nullable: true
+                      recent_activity:
+                        type: array
+                        items:
+                          type: string
+                        description: Last 5 agent event messages for the project.
+                      next_actions:
+                        type: array
+                        items:
+                          type: string
+                        description: Suggested next actions derived from current state.
+        '401':
+          $ref: '#/components/responses/401'
