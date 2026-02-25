@@ -180,7 +180,12 @@ function parseUpdatedSince(raw?: string): Date | null {
 }
 
 function invalidUpdatedSinceReply(reply: any) {
-  return invalidUpdatedSinceReply(reply);
+  return reply.status(400).send({ error: 'updated_since must be a valid ISO timestamp' });
+}
+
+function invalidLimitReply(reply: any, error?: string) {
+  if (!error) return null;
+  return reply.status(400).send({ error });
 }
 
 function normalizeProjectId(projectId?: string): string | null {
@@ -340,7 +345,7 @@ app.get('/api/v1/stories', async (req, reply) => {
   if (updatedSince) where.updatedAt = { gte: updatedSince };
 
   const limitResult = parseLimitStrict(q.limit);
-  if (limitResult.error === 'limit must be a positive integer') return reply.status(400).send({ error: limitResult.error });
+  if (limitResult.error) return invalidLimitReply(reply, limitResult.error);
 
   const stories = await prisma.story.findMany({
     where,
@@ -603,7 +608,7 @@ app.get('/api/v1/files', async (req, reply) => {
   if (updatedSince) where.createdAt = { gte: updatedSince };
 
   const limitResult = parseLimitStrict(q.limit);
-  if (limitResult.error === 'limit must be a positive integer') return reply.status(400).send({ error: limitResult.error });
+  if (limitResult.error) return invalidLimitReply(reply, limitResult.error);
 
   const files = await prisma.fileAsset.findMany({
     where,
@@ -822,7 +827,7 @@ app.get('/api/v1/agent/sessions/:id/events', async (req, reply) => {
   if (updatedSince) where.createdAt = { gte: updatedSince };
 
   const limitResult = parseLimitStrict(q.limit);
-  if (limitResult.error === 'limit must be a positive integer') return reply.status(400).send({ error: limitResult.error });
+  if (limitResult.error) return invalidLimitReply(reply, limitResult.error);
 
   const events = await prisma.agentEvent.findMany({
     where,
