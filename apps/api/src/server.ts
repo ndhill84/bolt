@@ -48,6 +48,15 @@ const MAX_LIMIT = 200;
 const TEXT_CONTENT_MAX_CHARS = 20000;
 const SUMMARY_MAX_CHARS = 400;
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+const ALLOWED_UPLOAD_CONTENT_TYPES = new Set([
+  'text/plain',
+  'text/markdown',
+  'application/json',
+  'text/csv',
+  'application/xml',
+  'text/xml',
+  'application/octet-stream',
+]);
 const FILE_LIST_INCLUDE_ALLOWLIST = new Set(['summary', 'textContent']);
 const STORY_FIELDS_ALLOWLIST = new Set([
   'id',
@@ -783,12 +792,20 @@ app.post('/api/v1/files/upload', async (req, reply) => {
   const absolutePath = path.join(dataDir, relativePath);
 
   const fileBytes = await filePart.toBuffer();
+  if (fileBytes.byteLength === 0) {
+    return reply.status(400).send({ error: 'empty file uploads are not allowed' });
+  }
   if (fileBytes.byteLength > MAX_UPLOAD_BYTES) {
     return reply.status(413).send({ error: `file too large; max ${MAX_UPLOAD_BYTES} bytes` });
   }
-  await writeFile(absolutePath, fileBytes);
 
   const contentType = filePart.mimetype ?? 'application/octet-stream';
+  if (!ALLOWED_UPLOAD_CONTENT_TYPES.has(contentType) && !contentType.startsWith('text/')) {
+    return reply.status(415).send({ error: `unsupported content type: ${contentType}` });
+  }
+
+  await writeFile(absolutePath, fileBytes);
+
   const extracted = deriveTextAndSummary(contentType, originalName, fileBytes);
 
   const file = await prisma.fileAsset.create({
@@ -806,7 +823,16 @@ app.post('/api/v1/files/upload', async (req, reply) => {
   });
 
   if (extracted.extractionError) {
-    app.log.warn({ fileId: file.id, filename: originalName, extractionError: extracted.extractionError }, 'file extraction failed');
+    app.log.warn(
+      {
+        fileId: file.id,
+        projectId: normalizedProjectId,
+        storyId: normalizedStoryId,
+        filename: originalName,
+        extractionError: extracted.extractionError,
+      },
+      'file extraction failed',
+    );
   }
 
   return reply.status(201).send({ data: file });
