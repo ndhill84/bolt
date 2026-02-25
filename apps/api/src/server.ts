@@ -186,10 +186,17 @@ function parseCsv(raw?: string): string[] {
     .filter(Boolean);
 }
 
-function buildFieldSet(raw: string | undefined, allowlist: Set<string>): Set<string> | null {
-  if (!raw) return null;
+function buildFieldSet(raw: string | undefined, allowlist: Set<string>): { fields: Set<string> | null; invalid: string[] } {
+  if (!raw) return { fields: null, invalid: [] };
   const requested = parseCsv(raw);
-  return new Set(requested.filter((field) => allowlist.has(field)));
+  const invalid = requested.filter((field) => !allowlist.has(field));
+  return { fields: new Set(requested.filter((field) => allowlist.has(field))), invalid };
+}
+
+function parseIncludeSet(raw: string | undefined, allowlist: Set<string>): { include: Set<string>; invalid: string[] } {
+  const requested = parseCsv(raw);
+  const invalid = requested.filter((field) => !allowlist.has(field));
+  return { include: new Set(requested.filter((field) => allowlist.has(field))), invalid };
 }
 
 function shapeRecord<T extends Record<string, unknown>>(record: T, fields: Set<string> | null): Record<string, unknown> {
@@ -326,7 +333,8 @@ app.get('/api/v1/stories', async (req, reply) => {
     orderBy: { updatedAt: 'desc' },
     take: parseLimit(q.limit),
   });
-  const fields = buildFieldSet(q.fields, STORY_FIELDS_ALLOWLIST);
+  const { fields, invalid } = buildFieldSet(q.fields, STORY_FIELDS_ALLOWLIST);
+  if (invalid.length) return reply.status(400).send({ error: `invalid fields: ${invalid.join(',')}` });
   return { data: stories.map((story) => shapeRecord(story as unknown as Record<string, unknown>, fields)) };
 });
 
@@ -585,12 +593,16 @@ app.get('/api/v1/files', async (req, reply) => {
     take: parseLimit(q.limit),
   });
 
-  const fields = buildFieldSet(q.fields, FILE_FIELDS_ALLOWLIST);
-  const includeSet = new Set(parseCsv(q.include).filter((field) => FILE_LIST_INCLUDE_ALLOWLIST.has(field)));
-  includeSet.forEach((field) => fields?.add(field));
+  const { fields, invalid: invalidFields } = buildFieldSet(q.fields, FILE_FIELDS_ALLOWLIST);
+  const { include: includeSet, invalid: invalidInclude } = parseIncludeSet(q.include, FILE_LIST_INCLUDE_ALLOWLIST);
+  if (invalidFields.length) return reply.status(400).send({ error: `invalid fields: ${invalidFields.join(',')}` });
+  if (invalidInclude.length) return reply.status(400).send({ error: `invalid include: ${invalidInclude.join(',')}` });
+
+  const effectiveFields = fields ? new Set(fields) : null;
+  includeSet.forEach((field) => effectiveFields?.add(field));
 
   const data = files.map((file) => {
-    const shaped = shapeRecord(file as unknown as Record<string, unknown>, fields);
+    const shaped = shapeRecord(file as unknown as Record<string, unknown>, effectiveFields);
     if ('summary' in shaped) shaped.summary = truncate(shaped.summary, 400);
     if ('textContent' in shaped) shaped.textContent = truncate(shaped.textContent, 2000);
     return shaped;
