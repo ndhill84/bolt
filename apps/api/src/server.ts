@@ -139,9 +139,29 @@ async function refreshBlockedForDependents(dependsOnStoryId: string) {
     select: { storyId: true },
   });
 
-  await Promise.all(
-    dependents.map((dep) => refreshBlocked(dep.storyId)),
-  );
+  await Promise.all(dependents.map((dep) => refreshBlocked(dep.storyId)));
+}
+
+async function createsDependencyCycle(storyId: string, dependsOnStoryId: string): Promise<boolean> {
+  const queue = [dependsOnStoryId];
+  const visited = new Set<string>();
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current) continue;
+    if (current === storyId) return true;
+    if (visited.has(current)) continue;
+    visited.add(current);
+
+    const nextEdges = await prisma.storyDependency.findMany({
+      where: { storyId: current },
+      select: { dependsOnStoryId: true },
+    });
+
+    for (const edge of nextEdges) queue.push(edge.dependsOnStoryId);
+  }
+
+  return false;
 }
 
 function parseLimit(raw?: string): number {
@@ -503,6 +523,10 @@ app.post('/api/v1/stories/:id/dependencies', async (req, reply) => {
   if (!dependencyTarget) return reply.status(404).send({ error: 'dependsOn story not found' });
   if (dependencyTarget.projectId !== story.projectId) {
     return reply.status(400).send({ error: 'dependencies must be within the same project' });
+  }
+
+  if (await createsDependencyCycle(id, body.dependsOnStoryId)) {
+    return reply.status(400).send({ error: 'dependency would create a cycle' });
   }
 
   try {
