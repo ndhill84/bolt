@@ -47,6 +47,7 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 const TEXT_CONTENT_MAX_CHARS = 20000;
 const SUMMARY_MAX_CHARS = 400;
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 const FILE_LIST_INCLUDE_ALLOWLIST = new Set(['summary', 'textContent']);
 const STORY_FIELDS_ALLOWLIST = new Set([
   'id',
@@ -244,7 +245,11 @@ function canExtractText(contentType: string, filename: string): boolean {
   );
 }
 
-function deriveTextAndSummary(contentType: string, filename: string, bytes: Buffer): { textContent: string | null; summary: string | null } {
+function deriveTextAndSummary(contentType: string, filename: string, bytes: Buffer): {
+  textContent: string | null;
+  summary: string | null;
+  extractionError?: string;
+} {
   if (!canExtractText(contentType, filename)) return { textContent: null, summary: null };
 
   try {
@@ -257,8 +262,12 @@ function deriveTextAndSummary(contentType: string, filename: string, bytes: Buff
       textContent: text.slice(0, TEXT_CONTENT_MAX_CHARS),
       summary: summary || null,
     };
-  } catch {
-    return { textContent: null, summary: null };
+  } catch (error) {
+    return {
+      textContent: null,
+      summary: null,
+      extractionError: error instanceof Error ? error.message : 'unknown extraction error',
+    };
   }
 }
 
@@ -774,6 +783,9 @@ app.post('/api/v1/files/upload', async (req, reply) => {
   const absolutePath = path.join(dataDir, relativePath);
 
   const fileBytes = await filePart.toBuffer();
+  if (fileBytes.byteLength > MAX_UPLOAD_BYTES) {
+    return reply.status(413).send({ error: `file too large; max ${MAX_UPLOAD_BYTES} bytes` });
+  }
   await writeFile(absolutePath, fileBytes);
 
   const contentType = filePart.mimetype ?? 'application/octet-stream';
@@ -792,6 +804,10 @@ app.post('/api/v1/files/upload', async (req, reply) => {
       uploadedBy: uploadedBy.trim(),
     },
   });
+
+  if (extracted.extractionError) {
+    app.log.warn({ fileId: file.id, filename: originalName, extractionError: extracted.extractionError }, 'file extraction failed');
+  }
 
   return reply.status(201).send({ data: file });
 });
