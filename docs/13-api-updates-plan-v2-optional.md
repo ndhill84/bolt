@@ -13,6 +13,11 @@ Add higher-leverage API capabilities that improve scale, planning semantics (tru
 ### 1) Introduce Sprint Domain Model
 **Why:** Current model is project-centric; “sprint” behavior is implicit.
 
+**Default semantics (agreed):**
+- A story can belong to **at most one sprint**.
+- Closed sprints are immutable for assignment (no adding stories).
+- Only one **active** sprint is allowed per project.
+
 **Plan**
 - Add `Sprint` entity:
   - `id`, `projectId`, `name`, `goal`, `status` (`planned|active|closed`), `startAt`, `endAt`, timestamps
@@ -43,7 +48,11 @@ Add:
 Request contract:
 - Explicit item list + operation payload
 - Per-item result list (`ok`/`error`) + overall summary
+- First-class `dry_run=true` mode
 - Optional transactional mode (`all_or_nothing=true`)
+- `max_batch_size` enforced (default 100)
+- Conflict policy must be explicit (`all_or_nothing` or partial-with-errors)
+- Idempotency key support for batch writes
 
 **Acceptance**
 - Skill can perform triage and planning updates in fewer calls.
@@ -56,7 +65,9 @@ Request contract:
 
 **Plan**
 - Add cursor pagination to high-volume endpoints:
-  - `/stories`, `/files`, `/agent/sessions/:id/events`, future `/audit`
+  - `/stories`, `/files`, `/agent/sessions/:id/events`, `/audit`
+- Cursor is opaque (base64) and encodes stable sort keys.
+- Default ordering is explicit and deterministic per endpoint (e.g., `updatedAt desc, id desc`).
 - Response shape:
 
 ```json
@@ -86,6 +97,7 @@ Request contract:
   - project/story create/update/delete
   - story move
   - note/dependency/file changes
+- Canonical fields: `eventId`, `eventType`, `entityType`, `entityId`, `projectId`, `source`, `actor`, `at`, `diff`.
 - Return monotonic ordering and stable event ids.
 
 **Acceptance**
@@ -113,8 +125,8 @@ Enhance digest responses with:
 **Why:** Separate skill repo will likely run in different contexts.
 
 **Plan**
-- Introduce token-based auth (service token or scoped PAT style).
-- Scope permissions by operation class (read/write/admin).
+- Introduce token-based auth (prefer scoped API keys over single static token).
+- Scope permissions by operation class (read/write/admin) and optional project scoping.
 - Add rate limiting for write endpoints.
 
 **Acceptance**
@@ -124,11 +136,11 @@ Enhance digest responses with:
 
 ## Implementation Order (V2)
 1. Sprint model + migrations + endpoints
-2. Cursor pagination primitives
-3. Batch endpoints
-4. Audit/changefeed
-5. Digest enhancements
-6. Auth/rate-limit hardening
+2. Auth/rate-limit baseline
+3. Cursor pagination primitives
+4. Batch endpoints (move + patch first)
+5. Audit/changefeed
+6. Digest enhancements
 7. Docs + contract examples
 
 ## Test Plan (V2)

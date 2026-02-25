@@ -33,6 +33,7 @@ type ProjectBody = {
 
 type StoryBody = {
   projectId?: string;
+  sprintId?: string | null;
   title?: string;
   description?: string;
   acceptanceCriteria?: string;
@@ -42,6 +43,16 @@ type StoryBody = {
   points?: number;
   assignee?: string;
   dueAt?: string;
+};
+
+type SprintStatus = 'planned' | 'active' | 'closed';
+
+type SprintBody = {
+  name?: string;
+  goal?: string;
+  status?: SprintStatus;
+  startAt?: string | null;
+  endAt?: string | null;
 };
 
 const DEFAULT_LIMIT = 50;
@@ -89,10 +100,14 @@ const FILE_FIELDS_ALLOWLIST = new Set([
   'createdAt',
 ]);
 const PRIORITY_ALLOWLIST = new Set(['low', 'med', 'high', 'urgent']);
+const SPRINT_STATUS_ALLOWLIST = new Set(['planned', 'active', 'closed']);
 const IDEMPOTENCY_TTL_MS = 1000 * 60 * 60 * 48;
+const MAX_BATCH_SIZE = 100;
 
 type ErrorCode =
   | 'BAD_REQUEST'
+  | 'UNAUTHORIZED'
+  | 'RATE_LIMITED'
   | 'VALIDATION_ERROR'
   | 'NOT_FOUND'
   | 'CONFLICT'
@@ -119,6 +134,7 @@ type IdempotencyMeta = {
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = path.join(appDir, 'data');
+const writeRateWindow = new Map<string, { count: number; resetAt: number }>();
 
 async function ensureDataLayout() {
   await mkdir(path.join(dataDir, 'files'), { recursive: true });
@@ -312,10 +328,12 @@ function deriveTextAndSummary(contentType: string, filename: string, bytes: Buff
 
 function codeFromStatus(statusCode: number): ErrorCode {
   if (statusCode === 400) return 'BAD_REQUEST';
+  if (statusCode === 401) return 'UNAUTHORIZED';
   if (statusCode === 404) return 'NOT_FOUND';
   if (statusCode === 409) return 'CONFLICT';
   if (statusCode === 413) return 'PAYLOAD_TOO_LARGE';
   if (statusCode === 415) return 'UNSUPPORTED_MEDIA_TYPE';
+  if (statusCode === 429) return 'RATE_LIMITED';
   if (statusCode === 503) return 'SERVICE_UNAVAILABLE';
   if (statusCode >= 500) return 'INTERNAL_ERROR';
   return 'BAD_REQUEST';
@@ -349,7 +367,88 @@ function idempotencyFingerprint(req: FastifyRequest, route: string): string {
   return createHash('sha256').update(source).digest('hex');
 }
 
+function encodeCursor(updatedAt: Date, id: string): string {
+  return Buffer.from(`${updatedAt.toISOString()}|${id}`).toString('base64url');
+}
+
+function decodeCursor(cursor?: string): { updatedAt: Date; id: string } | null {
+  if (!cursor) return null;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const [iso, id] = decoded.split('|');
+    const updatedAt = new Date(iso);
+    if (!id || Number.isNaN(updatedAt.getTime())) return null;
+    return { updatedAt, id };
+  } catch {
+    return null;
+  }
+}
+
+function cursorWhere(cursor?: string): Prisma.StoryWhereInput | null {
+  const parsed = decodeCursor(cursor);
+  if (!parsed) return null;
+  return {
+    OR: [
+      { updatedAt: { lt: parsed.updatedAt } },
+      { updatedAt: parsed.updatedAt, id: { lt: parsed.id } },
+    ],
+  };
+}
+
+function cursorWhereByCreatedAt(cursor?: string): Prisma.FileAssetWhereInput | null {
+  const parsed = decodeCursor(cursor);
+  if (!parsed) return null;
+  return {
+    OR: [
+      { createdAt: { lt: parsed.updatedAt } },
+      { createdAt: parsed.updatedAt, id: { lt: parsed.id } },
+    ],
+  };
+}
+
+async function logAudit(eventType: string, entityType: string, entityId: string, projectId?: string | null, payload?: unknown) {
+  try {
+    await prisma.auditEvent.create({
+      data: {
+        eventType,
+        entityType,
+        entityId,
+        projectId: projectId ?? null,
+        source: 'api',
+        payload: payload === undefined ? null : JSON.stringify(payload),
+      },
+    });
+  } catch (error) {
+    app.log.warn({ err: error }, 'failed to write audit event');
+  }
+}
+
 app.addHook('preHandler', async (req, reply) => {
+  const authToken = process.env.BOLT_API_TOKEN;
+  if (authToken) {
+    const inbound = req.headers['x-bolt-token'];
+    const provided = typeof inbound === 'string' ? inbound : Array.isArray(inbound) ? inbound[0] : '';
+    if (provided !== authToken) {
+      return reply.status(401).send(errorPayload(401, 'unauthorized'));
+    }
+  }
+
+  if (['POST', 'PATCH', 'DELETE'].includes(req.method)) {
+    const writeKey = `${req.ip}:${req.method}`;
+    const now = Date.now();
+    const windowMs = 60_000;
+    const maxWrites = 120;
+    const current = writeRateWindow.get(writeKey);
+    if (!current || current.resetAt <= now) {
+      writeRateWindow.set(writeKey, { count: 1, resetAt: now + windowMs });
+    } else {
+      current.count += 1;
+      if (current.count > maxWrites) {
+        return reply.status(429).send(errorPayload(429, 'write rate limit exceeded'));
+      }
+    }
+  }
+
   if (!['POST', 'PATCH'].includes(req.method)) return;
 
   const keyHeader = req.headers['idempotency-key'];
@@ -453,7 +552,12 @@ app.get('/health', async () => ({ ok: true }));
 app.get('/ready', async (_req, reply) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
-    await prisma.project.count({ where: { id: 'core' } });
+    await Promise.all([
+      prisma.project.count({ where: { id: 'core' } }),
+      prisma.idempotencyRecord.count(),
+      prisma.auditEvent.count(),
+      prisma.sprint.count(),
+    ]);
     return { ok: true };
   } catch (error) {
     return reply.status(503).send(errorPayload(503, 'service not ready', 'SERVICE_UNAVAILABLE', {
@@ -478,6 +582,7 @@ app.post('/api/v1/projects', async (req, reply) => {
     },
   });
 
+  await logAudit('project.created', 'project', project.id, project.id, { name: project.name });
   return reply.status(201).send({ data: project });
 });
 
@@ -496,6 +601,10 @@ app.patch('/api/v1/projects/:id', async (req, reply) => {
     },
   });
 
+  await logAudit('project.updated', 'project', project.id, project.id, {
+    before: { name: existing.name, description: existing.description },
+    after: { name: project.name, description: project.description },
+  });
   return { data: project };
 });
 
@@ -528,14 +637,164 @@ app.delete('/api/v1/projects/:id', async (req, reply) => {
     await prisma.project.delete({ where: { id } });
   }
 
+  await logAudit('project.deleted', 'project', id, id, { force: force === 'true' });
   return { data: { id, deleted: true } };
+});
+
+app.get('/api/v1/projects/:id/sprints', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const project = await prisma.project.findUnique({ where: { id } });
+  if (!project) return reply.status(404).send({ error: 'project not found' });
+
+  const sprints = await prisma.sprint.findMany({
+    where: { projectId: id },
+    orderBy: [{ createdAt: 'desc' }],
+  });
+  return { data: sprints };
+});
+
+app.post('/api/v1/projects/:id/sprints', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const body = req.body as SprintBody;
+  if (!body?.name?.trim()) return reply.status(400).send({ error: 'name is required' });
+
+  const project = await prisma.project.findUnique({ where: { id } });
+  if (!project) return reply.status(404).send({ error: 'project not found' });
+
+  if (body.status && !SPRINT_STATUS_ALLOWLIST.has(body.status)) {
+    return reply.status(400).send(errorPayload(400, 'invalid sprint status', 'VALIDATION_ERROR'));
+  }
+
+  if ((body.status ?? 'planned') === 'active') {
+    const active = await prisma.sprint.findFirst({ where: { projectId: id, status: 'active' } });
+    if (active) return reply.status(409).send({ error: 'only one active sprint is allowed per project' });
+  }
+
+  const sprint = await prisma.sprint.create({
+    data: {
+      projectId: id,
+      name: body.name.trim(),
+      goal: body.goal,
+      status: body.status ?? 'planned',
+      startAt: body.startAt ? new Date(body.startAt) : null,
+      endAt: body.endAt ? new Date(body.endAt) : null,
+    },
+  });
+
+  await logAudit('sprint.created', 'sprint', sprint.id, id, { name: sprint.name, status: sprint.status });
+  return reply.status(201).send({ data: sprint });
+});
+
+app.patch('/api/v1/sprints/:id', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const body = req.body as SprintBody;
+
+  const existing = await prisma.sprint.findUnique({ where: { id } });
+  if (!existing) return reply.status(404).send({ error: 'sprint not found' });
+
+  if (body.status && !SPRINT_STATUS_ALLOWLIST.has(body.status)) {
+    return reply.status(400).send(errorPayload(400, 'invalid sprint status', 'VALIDATION_ERROR'));
+  }
+
+  if (body.status === 'active' && existing.status !== 'active') {
+    const active = await prisma.sprint.findFirst({ where: { projectId: existing.projectId, status: 'active' } });
+    if (active && active.id !== id) {
+      return reply.status(409).send({ error: 'only one active sprint is allowed per project' });
+    }
+  }
+
+  if (existing.status === 'closed' && body.status && body.status !== 'closed') {
+    return reply.status(409).send({ error: 'closed sprint cannot be reopened in v2 defaults' });
+  }
+
+  const sprint = await prisma.sprint.update({
+    where: { id },
+    data: {
+      name: body.name?.trim() ?? existing.name,
+      goal: body.goal ?? existing.goal,
+      status: body.status ?? existing.status,
+      startAt: body.startAt === undefined ? existing.startAt : body.startAt ? new Date(body.startAt) : null,
+      endAt: body.endAt === undefined ? existing.endAt : body.endAt ? new Date(body.endAt) : null,
+    },
+  });
+
+  await logAudit('sprint.updated', 'sprint', sprint.id, sprint.projectId, { before: existing, after: sprint });
+  return { data: sprint };
+});
+
+app.post('/api/v1/sprints/:id/start', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const existing = await prisma.sprint.findUnique({ where: { id } });
+  if (!existing) return reply.status(404).send({ error: 'sprint not found' });
+  if (existing.status === 'closed') return reply.status(409).send({ error: 'cannot start a closed sprint' });
+
+  const active = await prisma.sprint.findFirst({ where: { projectId: existing.projectId, status: 'active' } });
+  if (active && active.id !== id) {
+    return reply.status(409).send({ error: 'only one active sprint is allowed per project' });
+  }
+
+  const sprint = await prisma.sprint.update({
+    where: { id },
+    data: { status: 'active', startAt: existing.startAt ?? new Date() },
+  });
+
+  await logAudit('sprint.started', 'sprint', sprint.id, sprint.projectId);
+  return { data: sprint };
+});
+
+app.post('/api/v1/sprints/:id/close', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const existing = await prisma.sprint.findUnique({ where: { id } });
+  if (!existing) return reply.status(404).send({ error: 'sprint not found' });
+
+  const sprint = await prisma.sprint.update({
+    where: { id },
+    data: { status: 'closed', endAt: existing.endAt ?? new Date() },
+  });
+
+  await logAudit('sprint.closed', 'sprint', sprint.id, sprint.projectId);
+  return { data: sprint };
+});
+
+app.post('/api/v1/sprints/:id/stories:assign', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const body = req.body as { storyIds?: string[]; dry_run?: boolean };
+  const storyIds = body.storyIds ?? [];
+  if (!Array.isArray(storyIds) || storyIds.length === 0) return reply.status(400).send({ error: 'storyIds is required' });
+  if (storyIds.length > MAX_BATCH_SIZE) {
+    return reply.status(400).send(errorPayload(400, `max batch size is ${MAX_BATCH_SIZE}`, 'VALIDATION_ERROR'));
+  }
+
+  const sprint = await prisma.sprint.findUnique({ where: { id } });
+  if (!sprint) return reply.status(404).send({ error: 'sprint not found' });
+  if (sprint.status === 'closed') return reply.status(409).send({ error: 'cannot assign stories to closed sprint' });
+
+  const stories = await prisma.story.findMany({ where: { id: { in: storyIds } } });
+  const invalid = stories.filter((s) => s.projectId !== sprint.projectId).map((s) => s.id);
+  if (invalid.length) {
+    return reply.status(400).send(errorPayload(400, 'all stories must belong to the sprint project', 'VALIDATION_ERROR', { invalid }));
+  }
+
+  if (body.dry_run === true) {
+    return { data: { dry_run: true, sprintId: id, assignCount: stories.length } };
+  }
+
+  const result = await prisma.story.updateMany({
+    where: { id: { in: storyIds }, projectId: sprint.projectId },
+    data: { sprintId: id },
+  });
+
+  await logAudit('sprint.stories_assigned', 'sprint', id, sprint.projectId, { storyIds, count: result.count });
+  return { data: { sprintId: id, assigned: result.count } };
 });
 
 app.get('/api/v1/stories', async (req, reply) => {
   const q = req.query as {
     status?: StoryStatus;
     projectId?: string;
+    sprintId?: string;
     limit?: string;
+    cursor?: string;
     updated_since?: string;
     fields?: string;
     assignee?: string;
@@ -549,6 +808,7 @@ app.get('/api/v1/stories', async (req, reply) => {
 
   const normalizedProjectId = normalizeProjectId(q.projectId);
   if (normalizedProjectId) where.projectId = normalizedProjectId;
+  if (q.sprintId) where.sprintId = q.sprintId;
   if (q.status) where.status = q.status;
   if (q.assignee?.trim()) {
     where.assignee = { contains: q.assignee.trim() };
@@ -605,14 +865,27 @@ app.get('/api/v1/stories', async (req, reply) => {
   const limitResult = parseLimitStrict(q.limit);
   if (limitResult.error) return invalidLimitReply(reply, limitResult.error);
 
+  const paginationWhere = cursorWhere(q.cursor);
+  if (q.cursor && !paginationWhere) {
+    return reply.status(400).send(errorPayload(400, 'cursor is invalid', 'VALIDATION_ERROR'));
+  }
+
   const stories = await prisma.story.findMany({
-    where,
-    orderBy: { updatedAt: 'desc' },
-    take: limitResult.limit,
+    where: paginationWhere ? { AND: [where, paginationWhere] } : where,
+    orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+    take: limitResult.limit + 1,
   });
   const { fields, invalid } = buildFieldSet(q.fields, STORY_FIELDS_ALLOWLIST);
   if (invalid.length) return invalidFieldsReply(reply, invalid);
-  return { data: stories.map((story) => shapeRecord(story as unknown as Record<string, unknown>, fields)) };
+
+  const hasMore = stories.length > limitResult.limit;
+  const pageItems = hasMore ? stories.slice(0, limitResult.limit) : stories;
+  const nextCursor = hasMore ? encodeCursor(pageItems[pageItems.length - 1].updatedAt, pageItems[pageItems.length - 1].id) : null;
+
+  return {
+    data: pageItems.map((story) => shapeRecord(story as unknown as Record<string, unknown>, fields)),
+    page: { nextCursor, hasMore },
+  };
 });
 
 app.post('/api/v1/stories', async (req, reply) => {
@@ -623,9 +896,17 @@ app.post('/api/v1/stories', async (req, reply) => {
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) return reply.status(404).send({ error: 'project not found' });
 
+  if (body.sprintId) {
+    const sprint = await prisma.sprint.findUnique({ where: { id: body.sprintId } });
+    if (!sprint) return reply.status(404).send({ error: 'sprint not found' });
+    if (sprint.projectId !== projectId) return reply.status(400).send({ error: 'sprint must belong to the same project' });
+    if (sprint.status === 'closed') return reply.status(409).send({ error: 'cannot add story to closed sprint' });
+  }
+
   const story = await prisma.story.create({
     data: {
       projectId,
+      sprintId: body.sprintId ?? null,
       title: body.title,
       description: body.description,
       acceptanceCriteria: body.acceptanceCriteria,
@@ -649,6 +930,7 @@ app.post('/api/v1/stories', async (req, reply) => {
     });
   }
 
+  await logAudit('story.created', 'story', story.id, story.projectId, { title: story.title, sprintId: story.sprintId });
   return reply.status(201).send({ data: story });
 });
 
@@ -658,6 +940,19 @@ app.patch('/api/v1/stories/:id', async (req, reply) => {
 
   const existing = await prisma.story.findUnique({ where: { id } });
   if (!existing) return reply.status(404).send({ error: 'story not found' });
+
+  if (body.sprintId !== undefined) {
+    if (body.sprintId === null) {
+      // allow unassign
+    } else {
+      const sprint = await prisma.sprint.findUnique({ where: { id: body.sprintId } });
+      if (!sprint) return reply.status(404).send({ error: 'sprint not found' });
+      if (sprint.projectId !== existing.projectId) {
+        return reply.status(400).send({ error: 'sprint must belong to the same project' });
+      }
+      if (sprint.status === 'closed') return reply.status(409).send({ error: 'cannot move story into closed sprint' });
+    }
+  }
 
   const story = await prisma.story.update({
     where: { id },
@@ -670,10 +965,12 @@ app.patch('/api/v1/stories/:id', async (req, reply) => {
       blocked: body.blocked,
       points: body.points,
       assignee: body.assignee,
+      sprintId: body.sprintId === undefined ? undefined : body.sprintId,
       dueAt: body.dueAt === undefined ? undefined : body.dueAt ? new Date(body.dueAt) : null,
     },
   });
 
+  await logAudit('story.updated', 'story', story.id, story.projectId, { before: existing, after: story });
   return { data: story };
 });
 
@@ -686,6 +983,7 @@ app.post('/api/v1/stories/:id/move', async (req, reply) => {
 
   const story = await prisma.story.update({ where: { id }, data: { status } });
   await refreshBlockedForDependents(id);
+  await logAudit('story.moved', 'story', story.id, story.projectId, { from: existing.status, to: status });
 
   const session = await prisma.agentSession.findFirst({ where: { projectId: story.projectId }, orderBy: { createdAt: 'asc' } });
   if (session) {
@@ -718,8 +1016,114 @@ app.delete('/api/v1/stories/:id', async (req, reply) => {
   ]);
 
   await Promise.all(dependentStoryIds.map((dep) => refreshBlocked(dep.storyId)));
+  await logAudit('story.deleted', 'story', id, story.projectId, { title: story.title });
 
   return { data: { id, deleted: true } };
+});
+
+app.post('/api/v1/stories/batch/move', async (req, reply) => {
+  const body = req.body as { items?: Array<{ id: string; status: StoryStatus }>; dry_run?: boolean; all_or_nothing?: boolean };
+  const items = body.items ?? [];
+  if (!Array.isArray(items) || items.length === 0) return reply.status(400).send({ error: 'items are required' });
+  if (items.length > MAX_BATCH_SIZE) {
+    return reply.status(400).send(errorPayload(400, `max batch size is ${MAX_BATCH_SIZE}`, 'VALIDATION_ERROR'));
+  }
+
+  const results: Array<{ id: string; ok: boolean; error?: string }> = [];
+  const run = async () => {
+    for (const item of items) {
+      const story = await prisma.story.findUnique({ where: { id: item.id } });
+      if (!story) {
+        results.push({ id: item.id, ok: false, error: 'story not found' });
+        if (body.all_or_nothing) throw new Error(`story ${item.id} not found`);
+        continue;
+      }
+      if (body.dry_run) {
+        results.push({ id: item.id, ok: true });
+        continue;
+      }
+      await prisma.story.update({ where: { id: item.id }, data: { status: item.status } });
+      await refreshBlockedForDependents(item.id);
+      await logAudit('story.moved', 'story', item.id, story.projectId, { to: item.status, batch: true });
+      results.push({ id: item.id, ok: true });
+    }
+  };
+
+  try {
+    if (body.all_or_nothing && !body.dry_run) {
+      await prisma.$transaction(async () => run());
+    } else {
+      await run();
+    }
+  } catch (error) {
+    return reply.status(409).send(errorPayload(409, error instanceof Error ? error.message : 'batch move failed', 'CONFLICT', { results }));
+  }
+
+  return { data: { dry_run: Boolean(body.dry_run), results } };
+});
+
+app.post('/api/v1/stories/batch/patch', async (req, reply) => {
+  const body = req.body as {
+    items?: Array<{ id: string; patch: Pick<StoryBody, 'priority' | 'assignee' | 'blocked' | 'sprintId' | 'dueAt'> }>;
+    dry_run?: boolean;
+    all_or_nothing?: boolean;
+  };
+  const items = body.items ?? [];
+  if (!Array.isArray(items) || items.length === 0) return reply.status(400).send({ error: 'items are required' });
+  if (items.length > MAX_BATCH_SIZE) {
+    return reply.status(400).send(errorPayload(400, `max batch size is ${MAX_BATCH_SIZE}`, 'VALIDATION_ERROR'));
+  }
+
+  const results: Array<{ id: string; ok: boolean; error?: string }> = [];
+  const run = async () => {
+    for (const item of items) {
+      const existing = await prisma.story.findUnique({ where: { id: item.id } });
+      if (!existing) {
+        results.push({ id: item.id, ok: false, error: 'story not found' });
+        if (body.all_or_nothing) throw new Error(`story ${item.id} not found`);
+        continue;
+      }
+
+      if (item.patch.sprintId) {
+        const sprint = await prisma.sprint.findUnique({ where: { id: item.patch.sprintId } });
+        if (!sprint || sprint.projectId !== existing.projectId || sprint.status === 'closed') {
+          results.push({ id: item.id, ok: false, error: 'invalid sprint assignment' });
+          if (body.all_or_nothing) throw new Error(`invalid sprint for ${item.id}`);
+          continue;
+        }
+      }
+
+      if (body.dry_run) {
+        results.push({ id: item.id, ok: true });
+        continue;
+      }
+
+      await prisma.story.update({
+        where: { id: item.id },
+        data: {
+          priority: item.patch.priority,
+          assignee: item.patch.assignee,
+          blocked: item.patch.blocked,
+          sprintId: item.patch.sprintId,
+          dueAt: item.patch.dueAt ? new Date(item.patch.dueAt) : item.patch.dueAt === null ? null : undefined,
+        },
+      });
+      await logAudit('story.updated', 'story', item.id, existing.projectId, { patch: item.patch, batch: true });
+      results.push({ id: item.id, ok: true });
+    }
+  };
+
+  try {
+    if (body.all_or_nothing && !body.dry_run) {
+      await prisma.$transaction(async () => run());
+    } else {
+      await run();
+    }
+  } catch (error) {
+    return reply.status(409).send(errorPayload(409, error instanceof Error ? error.message : 'batch patch failed', 'CONFLICT', { results }));
+  }
+
+  return { data: { dry_run: Boolean(body.dry_run), results } };
 });
 
 app.get('/api/v1/stories/:id/notes', async (req) => {
@@ -745,6 +1149,7 @@ app.post('/api/v1/stories/:id/notes', async (req, reply) => {
     },
   });
 
+  await logAudit('note.created', 'story_note', note.id, story.projectId, { storyId: id });
   return reply.status(201).send({ data: note });
 });
 
@@ -824,6 +1229,10 @@ app.post('/api/v1/stories/:id/dependencies', async (req, reply) => {
     });
 
     await refreshBlocked(id);
+    await logAudit('dependency.created', 'story_dependency', dependency.id, story.projectId, {
+      storyId: id,
+      dependsOnStoryId: body.dependsOnStoryId,
+    });
     return reply.status(201).send({ data: dependency });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -841,6 +1250,8 @@ app.delete('/api/v1/dependencies/:id', async (req, reply) => {
 
   await prisma.storyDependency.delete({ where: { id } });
   await refreshBlocked(dependency.storyId);
+  const ownerStory = await prisma.story.findUnique({ where: { id: dependency.storyId } });
+  await logAudit('dependency.deleted', 'story_dependency', id, ownerStory?.projectId, { storyId: dependency.storyId });
 
   return { data: { id, deleted: true } };
 });
@@ -850,6 +1261,7 @@ app.get('/api/v1/files', async (req, reply) => {
     storyId?: string;
     projectId?: string;
     limit?: string;
+    cursor?: string;
     updated_since?: string;
     fields?: string;
     include?: string;
@@ -868,10 +1280,15 @@ app.get('/api/v1/files', async (req, reply) => {
   const limitResult = parseLimitStrict(q.limit);
   if (limitResult.error) return invalidLimitReply(reply, limitResult.error);
 
+  const paginationWhere = cursorWhereByCreatedAt(q.cursor);
+  if (q.cursor && !paginationWhere) {
+    return reply.status(400).send(errorPayload(400, 'cursor is invalid', 'VALIDATION_ERROR'));
+  }
+
   const files = await prisma.fileAsset.findMany({
-    where,
-    orderBy: { createdAt: 'desc' },
-    take: limitResult.limit,
+    where: paginationWhere ? { AND: [where, paginationWhere] } : where,
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: limitResult.limit + 1,
   });
 
   const { fields, invalid: invalidFields } = buildFieldSet(q.fields, FILE_FIELDS_ALLOWLIST);
@@ -895,14 +1312,18 @@ app.get('/api/v1/files', async (req, reply) => {
   const effectiveFields = fields ? new Set(fields) : new Set(defaultFileFields);
   includeSet.forEach((field) => effectiveFields.add(field));
 
-  const data = files.map((file) => {
+  const hasMore = files.length > limitResult.limit;
+  const pageItems = hasMore ? files.slice(0, limitResult.limit) : files;
+
+  const data = pageItems.map((file) => {
     const shaped = shapeRecord(file as unknown as Record<string, unknown>, effectiveFields);
     if (effectiveFields.has('extracted')) shaped.extracted = Boolean(file.textContent);
     if ('summary' in shaped) shaped.summary = truncate(shaped.summary, 400);
     if ('textContent' in shaped) shaped.textContent = truncate(shaped.textContent, 2000);
     return shaped;
   });
-  return { data };
+  const nextCursor = hasMore ? encodeCursor(pageItems[pageItems.length - 1].createdAt, pageItems[pageItems.length - 1].id) : null;
+  return { data, page: { nextCursor, hasMore } };
 });
 
 app.post('/api/v1/files', async (req, reply) => {
@@ -956,6 +1377,7 @@ app.post('/api/v1/files', async (req, reply) => {
     });
   }
 
+  await logAudit('file.created', 'file', file.id, projectId, { filename: file.filename, storyId: file.storyId });
   return reply.status(201).send({ data: file });
 });
 
@@ -1070,6 +1492,7 @@ app.post('/api/v1/files/upload', async (req, reply) => {
     );
   }
 
+  await logAudit('file.uploaded', 'file', file.id, normalizedProjectId, { filename: file.filename, storyId: file.storyId });
   return reply.status(201).send({ data: file });
 });
 
@@ -1088,6 +1511,7 @@ app.delete('/api/v1/files/:id', async (req, reply) => {
   }
 
   await prisma.fileAsset.delete({ where: { id } });
+  await logAudit('file.deleted', 'file', id, file.projectId, { filename: file.filename });
   return { data: { id, deleted: true } };
 });
 
@@ -1103,7 +1527,7 @@ app.get('/api/v1/agent/sessions', async (req) => {
 
 app.get('/api/v1/agent/sessions/:id/events', async (req, reply) => {
   const { id } = req.params as { id: string };
-  const q = req.query as { limit?: string; updated_since?: string };
+  const q = req.query as { limit?: string; cursor?: string; updated_since?: string };
   const where: Prisma.AgentEventWhereInput = { sessionId: id };
   const updatedSince = parseUpdatedSince(q.updated_since);
   if (updatedSince && Number.isNaN(updatedSince.getTime())) {
@@ -1111,15 +1535,30 @@ app.get('/api/v1/agent/sessions/:id/events', async (req, reply) => {
   }
   if (updatedSince) where.createdAt = { gte: updatedSince };
 
+  const parsedCursor = decodeCursor(q.cursor);
+  if (q.cursor && !parsedCursor) {
+    return reply.status(400).send(errorPayload(400, 'cursor is invalid', 'VALIDATION_ERROR'));
+  }
+  if (parsedCursor) {
+    where.OR = [
+      { createdAt: { lt: parsedCursor.updatedAt } },
+      { createdAt: parsedCursor.updatedAt, id: { lt: parsedCursor.id } },
+    ];
+  }
+
   const limitResult = parseLimitStrict(q.limit);
   if (limitResult.error) return invalidLimitReply(reply, limitResult.error);
 
   const events = await prisma.agentEvent.findMany({
     where,
-    orderBy: { createdAt: 'desc' },
-    take: limitResult.limit,
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: limitResult.limit + 1,
   });
-  return { data: events };
+
+  const hasMore = events.length > limitResult.limit;
+  const pageItems = hasMore ? events.slice(0, limitResult.limit) : events;
+  const nextCursor = hasMore ? encodeCursor(pageItems[pageItems.length - 1].createdAt, pageItems[pageItems.length - 1].id) : null;
+  return { data: pageItems, page: { nextCursor, hasMore } };
 });
 
 app.post('/api/v1/agent/sessions/:id/events', async (req, reply) => {
@@ -1139,19 +1578,109 @@ app.post('/api/v1/agent/sessions/:id/events', async (req, reply) => {
   });
 
   await prisma.agentSession.update({ where: { id }, data: { lastHeartbeatAt: new Date() } });
+  await logAudit('agent.event.created', 'agent_event', event.id, session.projectId, { sessionId: id, type: event.type });
   return reply.status(201).send({ data: event });
+});
+
+app.get('/api/v1/audit', async (req, reply) => {
+  const q = req.query as { since?: string; projectId?: string; limit?: string; cursor?: string };
+  const where: Prisma.AuditEventWhereInput = {};
+
+  const normalizedProjectId = normalizeProjectId(q.projectId);
+  if (normalizedProjectId) where.projectId = normalizedProjectId;
+
+  if (q.since) {
+    const since = new Date(q.since);
+    if (Number.isNaN(since.getTime())) {
+      return reply.status(400).send(errorPayload(400, 'since must be a valid ISO timestamp', 'VALIDATION_ERROR'));
+    }
+    where.createdAt = { gte: since };
+  }
+
+  const parsedCursor = decodeCursor(q.cursor);
+  if (q.cursor && !parsedCursor) {
+    return reply.status(400).send(errorPayload(400, 'cursor is invalid', 'VALIDATION_ERROR'));
+  }
+  if (parsedCursor) {
+    where.OR = [
+      { createdAt: { lt: parsedCursor.updatedAt } },
+      { createdAt: parsedCursor.updatedAt, id: { lt: parsedCursor.id } },
+    ];
+  }
+
+  const limitResult = parseLimitStrict(q.limit);
+  if (limitResult.error) return invalidLimitReply(reply, limitResult.error);
+
+  const events = await prisma.auditEvent.findMany({
+    where,
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: limitResult.limit + 1,
+  });
+
+  const hasMore = events.length > limitResult.limit;
+  const pageItems = hasMore ? events.slice(0, limitResult.limit) : events;
+  const data = pageItems.map((event) => ({
+    eventId: event.id,
+    eventType: event.eventType,
+    entityType: event.entityType,
+    entityId: event.entityId,
+    projectId: event.projectId,
+    source: event.source,
+    actor: event.actor,
+    at: event.createdAt,
+    diff: event.payload ? JSON.parse(event.payload) : null,
+  }));
+  const nextCursor = hasMore ? encodeCursor(pageItems[pageItems.length - 1].createdAt, pageItems[pageItems.length - 1].id) : null;
+
+  return { data, page: { nextCursor, hasMore } };
+});
+
+app.get('/api/v1/digests/sprint/:id', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const sprint = await prisma.sprint.findUnique({ where: { id } });
+  if (!sprint) return reply.status(404).send({ error: 'sprint not found' });
+
+  const stories = await prisma.story.findMany({ where: { sprintId: id }, orderBy: { updatedAt: 'desc' } });
+  const counts = {
+    waiting: stories.filter((s) => s.status === 'waiting').length,
+    in_progress: stories.filter((s) => s.status === 'in_progress').length,
+    completed: stories.filter((s) => s.status === 'completed').length,
+    total: stories.length,
+  };
+
+  return {
+    data: {
+      sprint,
+      counts,
+      blocked: stories.filter((s) => s.blocked).map((s) => ({ id: s.id, title: s.title })),
+      byAssignee: stories.reduce<Record<string, number>>((acc, s) => {
+        const key = s.assignee?.trim() || 'Unassigned';
+        acc[key] = (acc[key] ?? 0) + 1;
+        return acc;
+      }, {}),
+    },
+  };
 });
 
 app.get('/api/v1/digests/project/:projectId/daily', async (req) => {
   const { projectId } = req.params as { projectId: string };
   const storyWhere = projectId === 'all' ? {} : { projectId };
+  const windowStart = new Date(Date.now() - 1000 * 60 * 60 * 24);
 
-  const [projectStories, recentEvents] = await Promise.all([
+  const [projectStories, recentEvents, recentAudit] = await Promise.all([
     prisma.story.findMany({ where: storyWhere, orderBy: { updatedAt: 'desc' } }),
     prisma.agentEvent.findMany({
       where: projectId === 'all' ? {} : { session: { projectId } },
       orderBy: { createdAt: 'desc' },
       take: 5,
+    }),
+    prisma.auditEvent.findMany({
+      where: {
+        ...(projectId === 'all' ? {} : { projectId }),
+        createdAt: { gte: windowStart },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
     }),
   ]);
 
@@ -1164,10 +1693,51 @@ app.get('/api/v1/digests/project/:projectId/daily', async (req) => {
   const blocked = projectStories.filter((s) => s.blocked).map((s) => ({ id: s.id, title: s.title }));
   const recent = recentEvents.map((e) => e.message);
 
+  const byAssignee = projectStories.reduce<Record<string, number>>((acc, story) => {
+    const key = story.assignee?.trim() || 'Unassigned';
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const byPriority = projectStories.reduce<Record<string, number>>((acc, story) => {
+    acc[story.priority] = (acc[story.priority] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const recentMoves = recentAudit
+    .filter((event) => event.eventType === 'story.moved')
+    .slice(0, 10)
+    .map((event) => ({ eventId: event.id, entityId: event.entityId, at: event.createdAt, diff: event.payload ? JSON.parse(event.payload) : null }));
+
+  const newBlocked = recentAudit.filter((event) => {
+    if (event.eventType !== 'story.updated' || !event.payload) return false;
+    try {
+      const payload = JSON.parse(event.payload) as { before?: { blocked?: boolean }; after?: { blocked?: boolean } };
+      return payload.before?.blocked === false && payload.after?.blocked === true;
+    } catch {
+      return false;
+    }
+  }).length;
+
+  const resolvedBlocked = recentAudit.filter((event) => {
+    if (event.eventType !== 'story.updated' || !event.payload) return false;
+    try {
+      const payload = JSON.parse(event.payload) as { before?: { blocked?: boolean }; after?: { blocked?: boolean } };
+      return payload.before?.blocked === true && payload.after?.blocked === false;
+    } catch {
+      return false;
+    }
+  }).length;
+
   return {
     data: {
       counts,
       blocked,
+      byAssignee,
+      byPriority,
+      newBlocked,
+      resolvedBlocked,
+      recentMoves,
       recent_activity: recent,
       next_actions: blocked.length ? ['Unblock blocked stories'] : ['Move waiting stories into progress'],
     },
