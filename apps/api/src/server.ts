@@ -179,6 +179,11 @@ function parseUpdatedSince(raw?: string): Date | null {
   return parsed;
 }
 
+function normalizeProjectId(projectId?: string): string | null {
+  if (!projectId || projectId === 'all') return null;
+  return projectId;
+}
+
 function parseCsv(raw?: string): string[] {
   if (!raw) return [];
   return raw
@@ -321,7 +326,8 @@ app.get('/api/v1/stories', async (req, reply) => {
   };
   const where: Prisma.StoryWhereInput = {};
 
-  if (q.projectId && q.projectId !== 'all') where.projectId = q.projectId;
+  const normalizedProjectId = normalizeProjectId(q.projectId);
+  if (normalizedProjectId) where.projectId = normalizedProjectId;
   if (q.status) where.status = q.status;
   const updatedSince = parseUpdatedSince(q.updated_since);
   if (updatedSince && Number.isNaN(updatedSince.getTime())) {
@@ -583,7 +589,8 @@ app.get('/api/v1/files', async (req, reply) => {
   };
   const where: Prisma.FileAssetWhereInput = {};
 
-  if (q.projectId && q.projectId !== 'all') where.projectId = q.projectId;
+  const normalizedProjectId = normalizeProjectId(q.projectId);
+  if (normalizedProjectId) where.projectId = normalizedProjectId;
   if (q.storyId) where.storyId = q.storyId;
   const updatedSince = parseUpdatedSince(q.updated_since);
   if (updatedSince && Number.isNaN(updatedSince.getTime())) {
@@ -793,7 +800,8 @@ app.delete('/api/v1/files/:id', async (req, reply) => {
 app.get('/api/v1/agent/sessions', async (req) => {
   const q = req.query as { projectId?: string };
   const where: Prisma.AgentSessionWhereInput = {};
-  if (q.projectId && q.projectId !== 'all') where.projectId = q.projectId;
+  const normalizedProjectId = normalizeProjectId(q.projectId);
+  if (normalizedProjectId) where.projectId = normalizedProjectId;
 
   const sessions = await prisma.agentSession.findMany({ where, orderBy: { createdAt: 'asc' } });
   return { data: sessions };
