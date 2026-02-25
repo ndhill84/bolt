@@ -164,13 +164,6 @@ async function createsDependencyCycle(storyId: string, dependsOnStoryId: string)
   return false;
 }
 
-function parseLimit(raw?: string): number {
-  if (!raw) return DEFAULT_LIMIT;
-  const parsed = Number.parseInt(raw, 10);
-  if (Number.isNaN(parsed) || parsed < 1) return DEFAULT_LIMIT;
-  return Math.min(parsed, MAX_LIMIT);
-}
-
 function parseLimitStrict(raw?: string): { limit: number; error?: string } {
   if (!raw) return { limit: DEFAULT_LIMIT };
   const parsed = Number.parseInt(raw, 10);
