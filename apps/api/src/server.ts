@@ -83,6 +83,7 @@ const FILE_FIELDS_ALLOWLIST = new Set([
   'filePath',
   'textContent',
   'summary',
+  'extracted',
   'uploadedBy',
   'createdAt',
 ]);
@@ -655,6 +656,7 @@ app.get('/api/v1/files', async (req, reply) => {
     'contentType',
     'byteSize',
     'filePath',
+    'extracted',
     'uploadedBy',
     'createdAt',
   ];
@@ -664,6 +666,7 @@ app.get('/api/v1/files', async (req, reply) => {
 
   const data = files.map((file) => {
     const shaped = shapeRecord(file as unknown as Record<string, unknown>, effectiveFields);
+    if (effectiveFields.has('extracted')) shaped.extracted = Boolean(file.textContent);
     if ('summary' in shaped) shaped.summary = truncate(shaped.summary, 400);
     if ('textContent' in shaped) shaped.textContent = truncate(shaped.textContent, 2000);
     return shaped;
@@ -733,6 +736,7 @@ app.get('/api/v1/files/:id/content', async (req, reply) => {
   return {
     data: {
       id: file.id,
+      extracted: Boolean(file.textContent),
       summary: file.summary,
       textContent: file.textContent,
     },
