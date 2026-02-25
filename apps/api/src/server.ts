@@ -179,6 +179,10 @@ function parseUpdatedSince(raw?: string): Date | null {
   return parsed;
 }
 
+function invalidUpdatedSinceReply(reply: any) {
+  return invalidUpdatedSinceReply(reply);
+}
+
 function normalizeProjectId(projectId?: string): string | null {
   if (!projectId || projectId === 'all') return null;
   return projectId;
@@ -331,7 +335,7 @@ app.get('/api/v1/stories', async (req, reply) => {
   if (q.status) where.status = q.status;
   const updatedSince = parseUpdatedSince(q.updated_since);
   if (updatedSince && Number.isNaN(updatedSince.getTime())) {
-    return reply.status(400).send({ error: 'updated_since must be a valid ISO timestamp' });
+    return invalidUpdatedSinceReply(reply);
   }
   if (updatedSince) where.updatedAt = { gte: updatedSince };
 
@@ -594,7 +598,7 @@ app.get('/api/v1/files', async (req, reply) => {
   if (q.storyId) where.storyId = q.storyId;
   const updatedSince = parseUpdatedSince(q.updated_since);
   if (updatedSince && Number.isNaN(updatedSince.getTime())) {
-    return reply.status(400).send({ error: 'updated_since must be a valid ISO timestamp' });
+    return invalidUpdatedSinceReply(reply);
   }
   if (updatedSince) where.createdAt = { gte: updatedSince };
 
@@ -813,7 +817,7 @@ app.get('/api/v1/agent/sessions/:id/events', async (req, reply) => {
   const where: Prisma.AgentEventWhereInput = { sessionId: id };
   const updatedSince = parseUpdatedSince(q.updated_since);
   if (updatedSince && Number.isNaN(updatedSince.getTime())) {
-    return reply.status(400).send({ error: 'updated_since must be a valid ISO timestamp' });
+    return invalidUpdatedSinceReply(reply);
   }
   if (updatedSince) where.createdAt = { gte: updatedSince };
 
