@@ -188,6 +188,14 @@ function invalidLimitReply(reply: any, error?: string) {
   return reply.status(400).send({ error });
 }
 
+function invalidFieldsReply(reply: any, invalid: string[]) {
+  return reply.status(400).send({ error: `invalid fields: ${invalid.join(',')}` });
+}
+
+function invalidIncludeReply(reply: any, invalid: string[]) {
+  return reply.status(400).send({ error: `invalid include: ${invalid.join(',')}` });
+}
+
 function normalizeProjectId(projectId?: string): string | null {
   if (!projectId || projectId === 'all') return null;
   return projectId;
@@ -353,7 +361,7 @@ app.get('/api/v1/stories', async (req, reply) => {
     take: limitResult.limit,
   });
   const { fields, invalid } = buildFieldSet(q.fields, STORY_FIELDS_ALLOWLIST);
-  if (invalid.length) return reply.status(400).send({ error: `invalid fields: ${invalid.join(',')}` });
+  if (invalid.length) return invalidFieldsReply(reply, invalid);
   return { data: stories.map((story) => shapeRecord(story as unknown as Record<string, unknown>, fields)) };
 });
 
@@ -618,8 +626,8 @@ app.get('/api/v1/files', async (req, reply) => {
 
   const { fields, invalid: invalidFields } = buildFieldSet(q.fields, FILE_FIELDS_ALLOWLIST);
   const { include: includeSet, invalid: invalidInclude } = parseIncludeSet(q.include, FILE_LIST_INCLUDE_ALLOWLIST);
-  if (invalidFields.length) return reply.status(400).send({ error: `invalid fields: ${invalidFields.join(',')}` });
-  if (invalidInclude.length) return reply.status(400).send({ error: `invalid include: ${invalidInclude.join(',')}` });
+  if (invalidFields.length) return invalidFieldsReply(reply, invalidFields);
+  if (invalidInclude.length) return invalidIncludeReply(reply, invalidInclude);
 
   const defaultFileFields = [
     'id',
